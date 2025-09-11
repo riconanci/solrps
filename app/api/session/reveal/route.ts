@@ -5,7 +5,7 @@ import { revealSchema } from "@/lib/zod";
 import { verifyCommit } from "@/lib/hash";
 import { tallyOutcome } from "@/lib/rps";
 import { payoutFromPot, calcPot } from "@/lib/payout";
-import { getUserOrSeed } from "../_utils";
+import { getUserOrSeed } from "../../_utils";
 import type { Move } from "@/lib/hash";
 
 export async function POST(req: Request) {
@@ -36,14 +36,23 @@ export async function POST(req: Request) {
         throw new Error("Reveal deadline passed");
       }
 
-      // Verify commit hash (reconstruct with pipe separator like in hash.ts)
-      const reconstructedHash = await verifyCommit(session.commitHash, moves as Move[], salt);
-      if (!reconstructedHash) {
+      // Verify commit hash
+      const isValidCommit = verifyCommit(session.commitHash, moves as Move[], salt);
+      if (!isValidCommit) {
         throw new Error("Commit hash verification failed");
       }
 
+      // Parse challenger moves (from stringified JSON)
+      let challengerMoves: Move[];
+      try {
+        challengerMoves = typeof session.challengerMoves === 'string' 
+          ? JSON.parse(session.challengerMoves)
+          : session.challengerMoves;
+      } catch (e) {
+        throw new Error("Invalid challenger moves format");
+      }
+
       // Judge all rounds
-      const challengerMoves = session.challengerMoves as Move[];
       const { outcomes, aWins, bWins, draws, overall } = tallyOutcome(moves as Move[], challengerMoves);
       
       // Calculate pot and payouts
@@ -72,7 +81,7 @@ export async function POST(req: Request) {
         
         if (overall === "CREATOR") {
           winnerUserId = session.creatorId;
-          // Creator gets back their stake + winnings
+          // Creator gets back their stake + winnings from challenger's stake
           await tx.user.update({
             where: { id: session.creatorId },
             data: { mockBalance: { increment: session.totalStake + payoutWinner - session.totalStake } }
@@ -80,49 +89,62 @@ export async function POST(req: Request) {
         } else {
           // CHALLENGER won
           winnerUserId = session.challengerId;
-          // Challenger gets back their stake + winnings
+          // Challenger gets both stakes minus fees
           await tx.user.update({
             where: { id: session.challengerId },
-            data: { mockBalance: { increment: session.totalStake + payoutWinner - session.totalStake } }
+            data: { mockBalance: { increment: payoutWinner } }
           });
         }
       }
 
-      // Update session to RESOLVED
+      // Update session with creator moves and mark as revealed
       await tx.session.update({
         where: { id: sessionId },
         data: {
           status: "RESOLVED",
+          creatorMoves: JSON.stringify(moves), // Store as stringified JSON for SQLite
           creatorRevealed: true,
-          creatorMoves: moves, // Store as JSON
         }
       });
 
-      // Create match result
+      // Create match result (SQLite-friendly with stringified JSON)
       const matchResult = await tx.matchResult.create({
         data: {
           sessionId,
-          roundsOutcome: outcomes, // Store as JSON
+          roundsOutcome: JSON.stringify(outcomes), // Stringified JSON for SQLite
           creatorWins: aWins,
           challengerWins: bWins,
           draws,
-          overall: overall as "CREATOR" | "CHALLENGER" | "DRAW",
+          overall, // String enum
           pot,
           feesTreasury,
           feesBurn,
           payoutWinner,
           winnerUserId,
-          replaySeed: Math.random().toString(36).substring(2, 15), // Random seed for replay
+          replaySeed: null,
         }
       });
 
-      return { matchResult, outcomes };
+      return {
+        session: {
+          ...session,
+          creatorMoves: JSON.stringify(moves),
+          status: "RESOLVED"
+        },
+        matchResult,
+        outcomes,
+        overall,
+        pot,
+        payoutWinner,
+        feesTreasury,
+        feesBurn
+      };
     });
 
     return NextResponse.json({
       success: true,
-      result: result.matchResult,
-      outcomes: result.outcomes
+      ...result,
+      message: "Reveal successful"
     });
 
   } catch (error: any) {

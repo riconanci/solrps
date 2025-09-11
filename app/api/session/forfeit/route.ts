@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { forfeitSchema } from "@/lib/zod";
 import { payoutFromPot, calcPot } from "@/lib/payout";
-import { getUserOrSeed } from "../_utils";
+import { getUserOrSeed } from "../../_utils";
 
 export async function POST(req: Request) {
   try {
@@ -41,10 +41,10 @@ export async function POST(req: Request) {
       const pot = calcPot(session.rounds, session.stakePerRound);
       const { payoutWinner, feesTreasury, feesBurn } = payoutFromPot(pot);
 
-      // Pay challenger (winner by forfeit)
+      // Pay challenger (winner by forfeit) - challenger gets both stakes minus fees
       await tx.user.update({
         where: { id: session.challengerId },
-        data: { mockBalance: { increment: session.totalStake + payoutWinner - session.totalStake } }
+        data: { mockBalance: { increment: payoutWinner } }
       });
 
       // Update session to FORFEITED
@@ -53,11 +53,11 @@ export async function POST(req: Request) {
         data: { status: "FORFEITED" }
       });
 
-      // Create match result for forfeit
+      // Create match result for forfeit (SQLite-friendly with stringified JSON)
       const matchResult = await tx.matchResult.create({
         data: {
           sessionId,
-          roundsOutcome: [], // No rounds played
+          roundsOutcome: "[]", // No rounds played - stringified JSON
           creatorWins: 0,
           challengerWins: 0,
           draws: 0,

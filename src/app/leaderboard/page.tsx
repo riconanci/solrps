@@ -1,203 +1,222 @@
+// app/leaderboard/page.tsx
 "use client";
 import { useEffect, useState } from "react";
-import Link from "next/link";
 
 type LeaderboardEntry = {
+  rank: number;
   userId: string;
   displayName: string;
-  totalWins: number;
-  totalEarnings: number;
-  gamesWon: number;
-  gamesLost: number;
-  totalStaked: number;
-  totalGames: number;
-  winRate: number;
-  netProfit: number;
+  totalWinnings: number;
+  matchesWon: number;
+  matchesPlayed: number;
+  avgWinning: number;
+  winRate: string;
 };
 
 type LeaderboardData = {
-  period: string;
+  success: boolean;
+  timeframe: string;
   leaderboard: LeaderboardEntry[];
-  generatedAt: string;
+  totalPlayers: number;
+  totalMatches: number;
 };
 
 export default function LeaderboardPage() {
   const [data, setData] = useState<LeaderboardData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [period, setPeriod] = useState<"all" | "week" | "month">("all");
+  const [error, setError] = useState<string | null>(null);
+  const [timeframe, setTimeframe] = useState<string>("all");
 
-  async function loadLeaderboard() {
+  useEffect(() => {
+    fetchLeaderboard(timeframe);
+  }, [timeframe]);
+
+  async function fetchLeaderboard(tf: string) {
     try {
       setLoading(true);
-      const res = await fetch(`/api/leaderboard?period=${period}`);
-      if (!res.ok) throw new Error("Failed to load leaderboard");
-      
+      setError(null);
+      const res = await fetch(`/api/leaderboard?timeframe=${tf}`);
+      if (!res.ok) throw new Error("Failed to fetch leaderboard");
       const leaderboardData = await res.json();
       setData(leaderboardData);
-    } catch (error) {
-      console.error("Failed to load leaderboard:", error);
+    } catch (err: any) {
+      setError(err.message);
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => {
-    loadLeaderboard();
-  }, [period]);
-
-  function getRankBadge(rank: number) {
-    if (rank === 1) return "🥇";
-    if (rank === 2) return "🥈";
-    if (rank === 3) return "🥉";
-    return `#${rank}`;
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-lg">Loading leaderboard...</div>
+        </div>
+      </div>
+    );
   }
 
-  function getProfitColor(profit: number) {
-    if (profit > 0) return "text-green-300";
-    if (profit < 0) return "text-red-300";
-    return "text-yellow-300";
+  if (error) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-red-400 text-lg">Error: {error}</div>
+          <button 
+            onClick={() => fetchLeaderboard(timeframe)}
+            className="mt-4 px-4 py-2 bg-blue-600 rounded hover:bg-blue-700"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Leaderboard</h1>
-        <Link 
-          href="/play" 
-          className="rounded bg-white/10 px-3 py-1 hover:bg-white/20"
-        >
-          Back to Play
-        </Link>
-      </div>
-
-      {/* Period Selector */}
-      <div className="flex gap-2">
-        {(["all", "month", "week"] as const).map((p) => (
-          <button
-            key={p}
-            onClick={() => setPeriod(p)}
-            className={`rounded-lg px-4 py-2 text-sm transition-colors ${
-              period === p
-                ? "bg-white/20 text-white"
-                : "bg-white/10 text-neutral-300 hover:bg-white/15"
-            }`}
-          >
-            {p === "all" ? "All Time" : p === "month" ? "Past Month" : "Past Week"}
-          </button>
-        ))}
-      </div>
-
-      {/* Loading State */}
-      {loading && (
-        <div className="flex items-center justify-center py-12">
-          <div className="text-neutral-400">Loading leaderboard...</div>
+    <div className="min-h-screen bg-slate-900 text-white p-8">
+      <div className="max-w-6xl mx-auto">
+        <div className="flex items-center justify-between mb-8">
+          <h1 className="text-3xl font-bold">🏆 Leaderboard</h1>
+          
+          {/* Timeframe selector */}
+          <div className="flex gap-2">
+            {[
+              { value: "all", label: "All Time" },
+              { value: "month", label: "This Month" },
+              { value: "week", label: "This Week" }
+            ].map(option => (
+              <button
+                key={option.value}
+                onClick={() => setTimeframe(option.value)}
+                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                  timeframe === option.value
+                    ? "bg-blue-600 text-white"
+                    : "bg-white/10 hover:bg-white/20"
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
         </div>
-      )}
 
-      {/* Leaderboard Table */}
-      {!loading && data && (
-        <div className="rounded-xl border border-white/10 overflow-hidden">
-          <div className="bg-white/5 px-4 py-3 border-b border-white/10">
-            <div className="flex items-center justify-between">
-              <h2 className="font-semibold">
-                {period === "all" ? "All Time" : period === "month" ? "Past Month" : "Past Week"} Rankings
+        {/* Stats summary */}
+        {data && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+            <div className="bg-white/5 rounded-xl p-4 text-center">
+              <div className="text-2xl font-bold text-blue-400">{data.totalPlayers}</div>
+              <div className="text-gray-400">Total Players</div>
+            </div>
+            <div className="bg-white/5 rounded-xl p-4 text-center">
+              <div className="text-2xl font-bold text-green-400">{data.totalMatches}</div>
+              <div className="text-gray-400">Total Matches</div>
+            </div>
+            <div className="bg-white/5 rounded-xl p-4 text-center">
+              <div className="text-2xl font-bold text-purple-400">
+                {data.leaderboard.reduce((sum, entry) => sum + entry.totalWinnings, 0).toLocaleString()}
               </div>
-              <div className="text-sm text-neutral-400">
-                {data.leaderboard.length} players
-              </div>
+              <div className="text-gray-400">Total Winnings</div>
             </div>
           </div>
+        )}
 
-          {data.leaderboard.length === 0 ? (
-            <div className="text-center py-12 text-neutral-400">
-              <div className="text-lg mb-2">No games played yet</div>
-              <div className="text-sm">
-                <Link href="/play" className="text-blue-400 hover:text-blue-300">
-                  Be the first to play!
-                </Link>
-              </div>
-            </div>
-          ) : (
+        {/* Leaderboard table */}
+        {data && data.leaderboard.length > 0 ? (
+          <div className="bg-white/5 rounded-xl overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full">
-                <thead className="bg-white/5">
-                  <tr className="text-left text-sm text-neutral-300">
-                    <th className="px-4 py-3">Rank</th>
-                    <th className="px-4 py-3">Player</th>
-                    <th className="px-4 py-3">Games</th>
-                    <th className="px-4 py-3">Win Rate</th>
-                    <th className="px-4 py-3">Total Earnings</th>
-                    <th className="px-4 py-3">Net Profit</th>
+                <thead>
+                  <tr className="bg-white/10">
+                    <th className="px-6 py-4 text-left">Rank</th>
+                    <th className="px-6 py-4 text-left">Player</th>
+                    <th className="px-6 py-4 text-right">Total Winnings</th>
+                    <th className="px-6 py-4 text-right">Matches Won</th>
+                    <th className="px-6 py-4 text-right">Matches Played</th>
+                    <th className="px-6 py-4 text-right">Win Rate</th>
+                    <th className="px-6 py-4 text-right">Avg Winning</th>
                   </tr>
                 </thead>
                 <tbody>
                   {data.leaderboard.map((entry, index) => (
-                    <tr 
-                      key={entry.userId}
-                      className="border-t border-white/5 hover:bg-white/5 transition-colors"
-                    >
-                      <td className="px-4 py-3">
-                        <span className="text-lg">
-                          {getRankBadge(index + 1)}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="font-medium">{entry.displayName}</div>
-                        <div className="text-xs text-neutral-400">
-                          {entry.userId.slice(0, 8)}...
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="text-sm">
-                          <div>{entry.totalGames} total</div>
-                          <div className="text-xs text-neutral-400">
-                            {entry.gamesWon}W • {entry.gamesLost}L
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{entry.winRate}%</span>
-                          <div className="w-16 h-2 bg-white/10 rounded-full overflow-hidden">
-                            <div 
-                              className="h-full bg-blue-400 transition-all"
-                              style={{ width: `${Math.min(entry.winRate, 100)}%` }}
-                            />
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="text-green-300 font-medium">
-                          {entry.totalEarnings.toLocaleString()}
-                        </div>
-                        <div className="text-xs text-neutral-400">
-                          from {entry.totalWins} wins
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className={`font-bold ${getProfitColor(entry.netProfit)}`}>
-                          {entry.netProfit > 0 ? "+" : ""}{entry.netProfit.toLocaleString()}
-                        </div>
-                        <div className="text-xs text-neutral-400">
-                          staked: {entry.totalStaked.toLocaleString()}
-                        </div>
-                      </td>
-                    </tr>
+                    <LeaderboardRow key={entry.userId} entry={entry} index={index} />
                   ))}
                 </tbody>
               </table>
             </div>
-          )}
-        </div>
-      )}
-
-      {/* Footer Info */}
-      {!loading && data && (
-        <div className="text-center text-xs text-neutral-500">
-          Last updated: {new Date(data.generatedAt).toLocaleString()}
-        </div>
-      )}
+          </div>
+        ) : (
+          <div className="text-center text-gray-400 py-12">
+            <div className="text-lg">No leaderboard data available</div>
+            <p className="mt-2">Play some games to see rankings!</p>
+          </div>
+        )}
+      </div>
     </div>
+  );
+}
+
+function LeaderboardRow({ 
+  entry, 
+  index 
+}: { 
+  entry: LeaderboardEntry; 
+  index: number;
+}) {
+  const getRankDisplay = (rank: number) => {
+    if (rank === 1) return "🥇";
+    if (rank === 2) return "🥈";
+    if (rank === 3) return "🥉";
+    return `#${rank}`;
+  };
+
+  const getRowBg = (rank: number) => {
+    if (rank === 1) return "bg-yellow-500/10 border-yellow-500/20";
+    if (rank === 2) return "bg-gray-400/10 border-gray-400/20";
+    if (rank === 3) return "bg-orange-600/10 border-orange-600/20";
+    return index % 2 === 0 ? "bg-white/5" : "bg-transparent";
+  };
+
+  return (
+    <tr className={`border-b border-white/10 hover:bg-white/10 transition-colors ${getRowBg(entry.rank)}`}>
+      <td className="px-6 py-4">
+        <div className="flex items-center gap-2">
+          <span className="text-lg font-bold">{getRankDisplay(entry.rank)}</span>
+        </div>
+      </td>
+      
+      <td className="px-6 py-4">
+        <div className="font-medium">{entry.displayName}</div>
+        <div className="text-xs text-gray-400">{entry.userId.slice(0, 8)}...</div>
+      </td>
+      
+      <td className="px-6 py-4 text-right">
+        <div className="font-mono font-bold text-green-400">
+          {entry.totalWinnings.toLocaleString()}
+        </div>
+      </td>
+      
+      <td className="px-6 py-4 text-right">
+        <div className="font-mono">{entry.matchesWon}</div>
+      </td>
+      
+      <td className="px-6 py-4 text-right">
+        <div className="font-mono">{entry.matchesPlayed}</div>
+      </td>
+      
+      <td className="px-6 py-4 text-right">
+        <div className={`font-mono ${
+          parseFloat(entry.winRate) >= 60 ? "text-green-400" :
+          parseFloat(entry.winRate) >= 40 ? "text-yellow-400" : "text-red-400"
+        }`}>
+          {entry.winRate}%
+        </div>
+      </td>
+      
+      <td className="px-6 py-4 text-right">
+        <div className="font-mono text-blue-400">
+          {entry.avgWinning.toLocaleString()}
+        </div>
+      </td>
+    </tr>
   );
 }

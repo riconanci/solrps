@@ -1,39 +1,66 @@
+// app/api/session/join/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { joinSessionSchema } from "@/lib/zod";
 import { getUserOrSeed } from "../../_utils";
 
 export async function POST(req: Request) {
-  const body = await req.json();
-  const parsed = joinSessionSchema.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
-  const { sessionId, challengerMoves } = parsed.data;
-  const user = await getUserOrSeed();
+  try {
+    const body = await req.json();
+    const parsed = joinSessionSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    }
+    
+    const { sessionId, challengerMoves } = parsed.data;
+    const user = await getUserOrSeed();
 
-  const result = await prisma.$transaction(async (tx) => {
-    const s = await tx.session.findUnique({ where: { id: sessionId } });
-    if (!s) throw new Error("Session not found");
-    if (s.status !== "OPEN") throw new Error("Session not open");
-    if (s.creatorId === user.id) throw new Error("Cannot join own session");
-    if (challengerMoves.length !== s.rounds) throw new Error("Moves length mismatch");
+    const result = await prisma.$transaction(async (tx: any) => {
+      const session = await tx.session.findUnique({ where: { id: sessionId } });
+      if (!session) throw new Error("Session not found");
+      if (session.status !== "OPEN") throw new Error("Session not open");
+      if (session.creatorId === user.id) throw new Error("Cannot join own session");
+      if (challengerMoves.length !== session.rounds) throw new Error("Moves length mismatch");
 
-    if ((await tx.user.findUnique({ where: { id: user.id } }))!.mockBalance < s.totalStake)
-      throw new Error("Insufficient balance");
+      // Check challenger has sufficient balance
+      const challenger = await tx.user.findUnique({ where: { id: user.id } });
+      if (!challenger || challenger.mockBalance < session.totalStake) {
+        throw new Error("Insufficient balance");
+      }
 
-    await tx.user.update({ where: { id: user.id }, data: { mockBalance: { decrement: s.totalStake } } });
+      // Debit challenger's balance
+      await tx.user.update({ 
+        where: { id: user.id }, 
+        data: { mockBalance: { decrement: session.totalStake } } 
+      });
 
-    const updated = await tx.session.update({
-      where: { id: sessionId },
-      data: {
-        status: "AWAITING_REVEAL",
-        challengerId: user.id,
-        challengerMoves: challengerMoves,
-        revealDeadline: new Date(Date.now() + Number(process.env.REVEAL_DEADLINE_SECONDS ?? 600) * 1000),
-      },
+      // Update session with challenger info (store moves as stringified JSON for SQLite)
+      const updatedSession = await tx.session.update({
+        where: { id: sessionId },
+        data: {
+          status: "AWAITING_REVEAL",
+          challengerId: user.id,
+          challengerMoves: challengerMoves, // Stringify for SQLite
+          revealDeadline: new Date(Date.now() + Number(process.env.REVEAL_DEADLINE_SECONDS ?? 600) * 1000),
+        },
+      });
+
+      return updatedSession;
     });
 
-    return updated;
-  });
+    return NextResponse.json({ 
+      success: true,
+      session: {
+        id: result.id, 
+        status: result.status,
+        challengerId: result.challengerId
+      }
+    });
 
-  return NextResponse.json({ id: result.id, status: result.status });
+  } catch (error: any) {
+    console.error("Join session error:", error);
+    return NextResponse.json({ 
+      error: error.message || "Internal server error" 
+    }, { status: 500 });
+  }
 }

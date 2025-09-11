@@ -1,133 +1,204 @@
+// src/components/JoinSessionModal.tsx
 "use client";
 import { useState } from "react";
-import type { Move } from "@/lib/hash";
+
+type SessionData = {
+  id: string;
+  creator: string;
+  rounds: number;
+  stakePerRound: number;
+  totalStake: number;
+  age: string;
+};
 
 interface JoinSessionModalProps {
   open: boolean;
   onClose: () => void;
-  sessionId: string | null;
-  rounds: number;
-  stakePerRound: number;
+  session: SessionData | null;
   onJoined: () => void;
 }
 
-export function JoinSessionModal({
-  open,
-  onClose,
-  sessionId,
-  rounds,
-  stakePerRound,
-  onJoined,
-}: JoinSessionModalProps) {
-  const [moves, setMoves] = useState<Move[]>(Array(rounds).fill("R"));
+export function JoinSessionModal({ open, onClose, session, onJoined }: JoinSessionModalProps) {
+  const [moves, setMoves] = useState<string>("R,P,R");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (!open || !sessionId) return null;
+  // Early return for null/closed states
+  if (!open || !session) {
+    return null;
+  }
 
-  const totalStake = rounds * stakePerRound;
+  // Now TypeScript knows session is not null
+  const moveEmojis = { 
+    R: "🪨 Rock", 
+    P: "📄 Paper", 
+    S: "✂️ Scissors" 
+  } as const;
+  
+  const totalPot = session.totalStake * 2;
 
-  async function join() {
+  const handleJoin = async () => {
     setBusy(true);
     setError(null);
-    
+
     try {
-      const res = await fetch("/api/session/join", {
+      const moveArray = moves
+        .split(",")
+        .map(m => m.trim().toUpperCase())
+        .filter(Boolean);
+      
+      // Validate move count
+      if (moveArray.length !== session.rounds) {
+        throw new Error(`You need exactly ${session.rounds} moves for this game`);
+      }
+
+      // Validate each move
+      for (const move of moveArray) {
+        if (!["R", "P", "S"].includes(move)) {
+          throw new Error(`Invalid move: ${move}. Use R, P, or S only.`);
+        }
+      }
+
+      // Make API call
+      const response = await fetch("/api/session/join", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sessionId,
-          challengerMoves: moves,
+          sessionId: session.id,
+          challengerMoves: moveArray,
         }),
       });
 
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || "Failed to join session");
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData?.error || `Failed with status ${response.status}`);
       }
 
+      const result = await response.json();
+      
+      if (!result.success) {
+        throw new Error(result.error || "Failed to join session");
+      }
+
+      // Success - notify parent and close
       onJoined();
       onClose();
-    } catch (err: any) {
-      setError(err.message || "Failed to join session");
+      
+    } catch (err) {
+      console.error("Join session error:", err);
+      setError(err instanceof Error ? err.message : "Failed to join session");
     } finally {
       setBusy(false);
     }
-  }
-
-  function updateMove(roundIndex: number, move: Move) {
-    const newMoves = [...moves];
-    newMoves[roundIndex] = move;
-    setMoves(newMoves);
-  }
-
-  function getMoveLabel(move: Move) {
-    const labels = { R: "Rock", P: "Paper", S: "Scissors" };
-    return labels[move];
-  }
+  };
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-      <div className="w-full max-w-md rounded-2xl border border-white/15 bg-neutral-950 p-6">
-        <div className="mb-4">
-          <h2 className="text-lg font-semibold">Join Session</h2>
-          <p className="text-sm text-neutral-400 mt-1">
-            Choose your moves for all {rounds} rounds. Your stake of {totalStake} tokens will be locked.
-          </p>
-        </div>
-
-        <div className="space-y-4">
-          {Array.from({ length: rounds }, (_, i) => (
-            <div key={i} className="space-y-2">
-              <div className="text-sm font-medium">Round {i + 1}</div>
-              <div className="flex gap-2">
-                {(["R", "P", "S"] as const).map((move) => (
-                  <button
-                    key={move}
-                    type="button"
-                    onClick={() => updateMove(i, move)}
-                    disabled={busy}
-                    className={`flex-1 rounded-lg border px-3 py-2 text-sm transition-colors ${
-                      moves[i] === move
-                        ? "bg-white/20 border-white/30 text-white"
-                        : "bg-white/10 border-white/10 hover:bg-white/15 text-neutral-300"
-                    }`}
-                  >
-                    {getMoveLabel(move)}
-                  </button>
-                ))}
-              </div>
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-slate-800 p-6 rounded-xl border border-white/20 max-w-md w-full mx-4">
+        
+        {/* Header */}
+        <h3 className="text-xl font-bold mb-4 text-white">Join Game</h3>
+        
+        {/* Game Info Card */}
+        <div className="bg-white/5 rounded-lg p-4 mb-4">
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-gray-400">Creator:</span>
+              <span className="font-medium text-white">{session.creator}</span>
             </div>
-          ))}
-
-          {error && (
-            <div className="rounded-md border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-300">
-              {error}
+            <div className="flex justify-between">
+              <span className="text-gray-400">Rounds:</span>
+              <span className="font-medium text-white">{session.rounds}</span>
             </div>
-          )}
-
-          <div className="bg-white/5 rounded-lg p-3 text-sm">
-            <div className="flex justify-between text-neutral-300">
-              <span>Total Stake:</span>
-              <span className="font-medium">{totalStake} tokens</span>
+            <div className="flex justify-between">
+              <span className="text-gray-400">Stake per round:</span>
+              <span className="font-medium text-white">{session.stakePerRound} tokens</span>
+            </div>
+            <div className="flex justify-between border-t border-white/10 pt-2">
+              <span className="text-gray-400">Total Pot:</span>
+              <span className="font-mono text-green-400 font-bold">{totalPot} tokens</span>
             </div>
           </div>
         </div>
 
-        <div className="mt-6 flex justify-end gap-3">
+        {/* Move Input Section */}
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-2 text-white">
+              Choose your moves ({session.rounds} rounds)
+            </label>
+            <input
+              type="text"
+              value={moves}
+              onChange={(e) => setMoves(e.target.value)}
+              placeholder={`e.g., ${Array(session.rounds).fill("R").join(",")}`}
+              className="w-full px-3 py-2 bg-slate-700 border border-white/20 rounded-lg focus:outline-none focus:border-blue-500 text-white placeholder-gray-400"
+              disabled={busy}
+            />
+            <div className="text-xs text-gray-400 mt-1">
+              Use R (Rock), P (Paper), S (Scissors), separated by commas
+            </div>
+          </div>
+
+          {/* Move Guide */}
+          <div className="bg-white/5 rounded-lg p-3">
+            <div className="text-sm font-medium mb-2 text-white">Move Guide:</div>
+            <div className="grid grid-cols-3 gap-2">
+              {Object.entries(moveEmojis).map(([key, value]) => (
+                <div key={key} className="text-center p-2 bg-white/5 rounded text-xs">
+                  <div className="font-mono text-white font-bold">{key}</div>
+                  <div className="text-gray-400">{value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Error Display */}
+          {error && (
+            <div className="p-3 bg-red-900/20 border border-red-500/20 rounded-lg">
+              <p className="text-red-400 text-sm">{error}</p>
+            </div>
+          )}
+
+          {/* Cost Breakdown */}
+          <div className="bg-white/5 rounded-lg p-3">
+            <div className="text-sm space-y-2">
+              <div className="flex justify-between">
+                <span className="text-gray-400">Your stake:</span>
+                <span className="font-mono text-white">{session.totalStake} tokens</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Opponent stake:</span>
+                <span className="font-mono text-white">{session.totalStake} tokens</span>
+              </div>
+              <div className="border-t border-white/10 pt-2">
+                <div className="flex justify-between">
+                  <span className="text-gray-400 font-medium">Winner takes:</span>
+                  <span className="font-mono text-green-400 font-bold">{totalPot * 0.9} tokens</span>
+                </div>
+                <div className="text-xs text-gray-500 text-right">
+                  (90% after 10% fees)
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex gap-3 mt-6">
           <button
-            className="rounded-lg bg-white/10 px-4 py-2 hover:bg-white/20 transition-colors"
             onClick={onClose}
             disabled={busy}
+            className="flex-1 px-4 py-2 bg-gray-600 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg font-medium transition-colors text-white"
           >
             Cancel
           </button>
           <button
-            className="rounded-lg bg-blue-500/20 px-4 py-2 text-blue-300 hover:bg-blue-500/30 transition-colors disabled:opacity-50"
-            onClick={join}
-            disabled={busy}
+            onClick={handleJoin}
+            disabled={busy || !moves.trim()}
+            className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg font-medium transition-colors text-white"
           >
-            {busy ? "Joining..." : `Join & Lock ${totalStake} Tokens`}
+            {busy ? "Joining..." : "Join Game"}
           </button>
         </div>
       </div>
