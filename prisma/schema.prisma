@@ -1,0 +1,75 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum SessionStatus {
+  OPEN
+  LOCKED
+  AWAITING_REVEAL
+  RESOLVED
+  FORFEITED
+  CANCELLED
+}
+
+enum OverallOutcome {
+  CREATOR
+  CHALLENGER
+  DRAW
+}
+
+model User {
+  id           String   @id @default(cuid())
+  createdAt    DateTime @default(now())
+  displayName  String?
+  walletPubkey String?
+  mockBalance  Int      @default(100000)
+  // Relations
+  sessions     Session[] @relation("creatorSessions")
+  challenges   Session[] @relation("challengerSessions")
+  matches      MatchResult[]
+}
+
+model Session {
+  id              String   @id @default(cuid())
+  createdAt       DateTime @default(now())
+  status          SessionStatus
+  rounds          Int
+  stakePerRound   Int
+  totalStake      Int
+  commitHash      String
+  saltHint        String?
+  creatorId       String
+  creator         User     @relation("creatorSessions", fields: [creatorId], references: [id])
+  challengerId    String?
+  challenger      User?    @relation("challengerSessions", fields: [challengerId], references: [id])
+  creatorRevealed Boolean  @default(false)
+  revealDeadline  DateTime
+  isPrivate       Boolean  @default(false)
+  privateCode     String?  @unique
+  creatorMoves    Json?
+  challengerMoves Json?
+  result          MatchResult?
+}
+
+model MatchResult {
+  id             String   @id @default(cuid())
+  sessionId      String   @unique
+  session        Session  @relation(fields: [sessionId], references: [id])
+  createdAt      DateTime @default(now())
+  roundsOutcome  Json
+  creatorWins    Int
+  challengerWins Int
+  draws          Int
+  overall        OverallOutcome
+  pot            Int
+  feesTreasury   Int
+  feesBurn       Int
+  payoutWinner   Int
+  winnerUserId   String?
+  replaySeed     String?
+}
