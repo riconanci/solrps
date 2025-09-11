@@ -19,7 +19,7 @@ interface JoinSessionModalProps {
 }
 
 export function JoinSessionModal({ open, onClose, session, onJoined }: JoinSessionModalProps) {
-  const [moves, setMoves] = useState<string>("R,P,R");
+  const [moves, setMoves] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,27 +29,19 @@ export function JoinSessionModal({ open, onClose, session, onJoined }: JoinSessi
   }
 
   // Now TypeScript knows session is not null
-  const moveEmojis = { 
-    R: "🪨 Rock", 
-    P: "📄 Paper", 
-    S: "✂️ Scissors" 
-  } as const;
+  const currentSession = session;
+  const totalPot = currentSession.totalStake * 2;
   
-  const totalPot = session.totalStake * 2;
-
   const handleJoin = async () => {
     setBusy(true);
     setError(null);
 
     try {
-      const moveArray = moves
-        .split(",")
-        .map(m => m.trim().toUpperCase())
-        .filter(Boolean);
+      const moveArray = moves.split(",").map(m => m.trim()).filter(Boolean);
       
       // Validate move count
-      if (moveArray.length !== session.rounds) {
-        throw new Error(`You need exactly ${session.rounds} moves for this game`);
+      if (moveArray.length !== currentSession.rounds) {
+        throw new Error(`Please select moves for all ${currentSession.rounds} rounds`);
       }
 
       // Validate each move
@@ -64,7 +56,7 @@ export function JoinSessionModal({ open, onClose, session, onJoined }: JoinSessi
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sessionId: session.id,
+          sessionId: currentSession.id,
           challengerMoves: moveArray,
         }),
       });
@@ -92,6 +84,19 @@ export function JoinSessionModal({ open, onClose, session, onJoined }: JoinSessi
     }
   };
 
+  // Helper function to get move from current index
+  function getMoveFromIndex(index: number): string {
+    const moveArray = moves.split(",").map(m => m.trim()).filter(Boolean);
+    return moveArray[index] || ""; // Return empty string if not set
+  }
+
+  // Helper function to get move emoji
+  function getMoveEmoji(move: string): string {
+    if (move === "R") return "🪨";
+    if (move === "P") return "📄";
+    return "✂️";
+  }
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-slate-800 p-6 rounded-xl border border-white/20 max-w-md w-full mx-4">
@@ -104,15 +109,15 @@ export function JoinSessionModal({ open, onClose, session, onJoined }: JoinSessi
           <div className="space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-gray-400">Creator:</span>
-              <span className="font-medium text-white">{session.creator}</span>
+              <span className="font-medium text-white">{currentSession.creator}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-400">Rounds:</span>
-              <span className="font-medium text-white">{session.rounds}</span>
+              <span className="font-medium text-white">{currentSession.rounds}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-400">Stake per round:</span>
-              <span className="font-medium text-white">{session.stakePerRound} tokens</span>
+              <span className="font-medium text-white">{currentSession.stakePerRound} tokens</span>
             </div>
             <div className="flex justify-between border-t border-white/10 pt-2">
               <span className="text-gray-400">Total Pot:</span>
@@ -121,35 +126,51 @@ export function JoinSessionModal({ open, onClose, session, onJoined }: JoinSessi
           </div>
         </div>
 
-        {/* Move Input Section */}
+        {/* Move Selection */}
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium mb-2 text-white">
-              Choose your moves ({session.rounds} rounds)
+              Choose your moves ({currentSession.rounds} rounds)
             </label>
-            <input
-              type="text"
-              value={moves}
-              onChange={(e) => setMoves(e.target.value)}
-              placeholder={`e.g., ${Array(session.rounds).fill("R").join(",")}`}
-              className="w-full px-3 py-2 bg-slate-700 border border-white/20 rounded-lg focus:outline-none focus:border-blue-500 text-white placeholder-gray-400"
-              disabled={busy}
-            />
-            <div className="text-xs text-gray-400 mt-1">
-              Use R (Rock), P (Paper), S (Scissors), separated by commas
-            </div>
-          </div>
-
-          {/* Move Guide */}
-          <div className="bg-white/5 rounded-lg p-3">
-            <div className="text-sm font-medium mb-2 text-white">Move Guide:</div>
-            <div className="grid grid-cols-3 gap-2">
-              {Object.entries(moveEmojis).map(([key, value]) => (
-                <div key={key} className="text-center p-2 bg-white/5 rounded text-xs">
-                  <div className="font-mono text-white font-bold">{key}</div>
-                  <div className="text-gray-400">{value}</div>
+            
+            {/* Emoji Move Selector */}
+            <div className="space-y-3">
+              {Array.from({ length: currentSession.rounds }, (_, i) => (
+                <div key={i} className="flex gap-2 items-center">
+                  <div className="text-xs text-gray-400 w-16">Round {i + 1}:</div>
+                  <div className="flex gap-1">
+                    {["R", "P", "S"].map((choice) => (
+                      <button
+                        key={choice}
+                        type="button"
+                        onClick={() => {
+                          const moveArray = moves.split(",").map(m => m.trim()).filter(Boolean);
+                          // Ensure array has enough elements
+                          while (moveArray.length <= i) {
+                            moveArray.push("");
+                          }
+                          moveArray[i] = choice;
+                          // Filter out empty moves at the end for cleaner display
+                          const cleanedMoves = moveArray.slice(0, currentSession.rounds);
+                          setMoves(cleanedMoves.join(","));
+                        }}
+                        className={
+                          "rounded-lg border w-12 h-12 flex items-center justify-center text-xl " +
+                          (getMoveFromIndex(i) === choice
+                            ? "bg-white/20 border-white/30"
+                            : "bg-white/10 border-white/10 hover:bg-white/15")
+                        }
+                      >
+                        {getMoveEmoji(choice)}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               ))}
+            </div>
+            
+            <div className="text-xs text-gray-400 mt-2">
+              Current moves: {moves || "None selected yet"}
             </div>
           </div>
 
@@ -165,11 +186,11 @@ export function JoinSessionModal({ open, onClose, session, onJoined }: JoinSessi
             <div className="text-sm space-y-2">
               <div className="flex justify-between">
                 <span className="text-gray-400">Your stake:</span>
-                <span className="font-mono text-white">{session.totalStake} tokens</span>
+                <span className="font-mono text-white">{currentSession.totalStake} tokens</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-400">Opponent stake:</span>
-                <span className="font-mono text-white">{session.totalStake} tokens</span>
+                <span className="font-mono text-white">{currentSession.totalStake} tokens</span>
               </div>
               <div className="border-t border-white/10 pt-2">
                 <div className="flex justify-between">
@@ -195,7 +216,7 @@ export function JoinSessionModal({ open, onClose, session, onJoined }: JoinSessi
           </button>
           <button
             onClick={handleJoin}
-            disabled={busy || !moves.trim()}
+            disabled={busy || moves.split(",").filter(m => m.trim()).length !== currentSession.rounds}
             className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg font-medium transition-colors text-white"
           >
             {busy ? "Joining..." : "Join Game"}
