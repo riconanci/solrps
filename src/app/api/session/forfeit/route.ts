@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { forfeitSchema } from "@/lib/zod";
 import { payoutFromPot, calcPot } from "@/lib/payout";
-import { getUserOrSeed } from "../_utils";
+import { getUserOrSeed } from "../../_utils";
 
 export async function POST(req: Request) {
   try {
