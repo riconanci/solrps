@@ -1,8 +1,20 @@
 {
+  "functions": {
+    "app/api/cleanup/route.ts": {
+      "maxDuration": 60
+    },
+    "app/api/weekly/distribute/route.ts": {
+      "maxDuration": 60
+    }
+  },
   "crons": [
     {
       "path": "/api/cleanup",
       "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/weekly/auto-distribute",
+      "schedule": "0 0 * * 1"
     }
   ]
 }

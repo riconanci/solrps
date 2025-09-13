@@ -11,6 +11,7 @@ type LeaderboardEntry = {
   matchesPlayed: number;
   avgWinning: number;
   winRate: string;
+  netProfit: number;
 };
 
 type LeaderboardData = {
@@ -73,9 +74,9 @@ export default function LeaderboardPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white p-8">
+    <div className="min-h-screen bg-slate-900 text-white p-4 md:p-8">
       <div className="max-w-6xl mx-auto">
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-8 gap-4">
           <h1 className="text-3xl font-bold">🏆 Leaderboard</h1>
           
           {/* Timeframe selector */}
@@ -205,8 +206,8 @@ function LeaderboardRow({
       
       <td className="px-6 py-4 text-right">
         <div className={`font-mono ${
-          parseFloat(entry.winRate) >= 60 ? "text-green-400" :
-          parseFloat(entry.winRate) >= 40 ? "text-yellow-400" : "text-red-400"
+          parseFloat(entry.winRate) >= 60 ? 'text-green-400' : 
+          parseFloat(entry.winRate) >= 40 ? 'text-yellow-400' : 'text-red-400'
         }`}>
           {entry.winRate}%
         </div>

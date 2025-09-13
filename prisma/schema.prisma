@@ -1,6 +1,4 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
+// prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
@@ -20,6 +18,7 @@ model User {
   sessions     Session[] @relation("creatorSessions")
   challenges   Session[] @relation("challengerSessions")
   wins         MatchResult[] @relation("winnerRelation")
+  weeklyRewards WeeklyReward[] @relation("userWeeklyRewards")
 
   @@map("users")
 }
@@ -49,22 +48,82 @@ model Session {
 }
 
 model MatchResult {
-  id             String   @id @default(cuid())
-  sessionId      String   @unique
-  session        Session  @relation(fields: [sessionId], references: [id])
-  createdAt      DateTime @default(now())
-  roundsOutcome  Json     // PostgreSQL native JSON
-  creatorWins    Int
-  challengerWins Int
-  draws          Int
-  overall        String   // CREATOR, CHALLENGER, DRAW
-  pot            Int
-  feesTreasury   Int
-  feesBurn       Int
-  payoutWinner   Int
-  winnerUserId   String?
-  winner         User?    @relation("winnerRelation", fields: [winnerUserId], references: [id])
-  replaySeed     String?
+  id               String   @id @default(cuid())
+  sessionId        String   @unique
+  session          Session  @relation(fields: [sessionId], references: [id])
+  createdAt        DateTime @default(now())
+  roundsOutcome    Json     // PostgreSQL native JSON
+  creatorWins      Int
+  challengerWins   Int
+  draws            Int
+  overall          String   // CREATOR, CHALLENGER, DRAW
+  pot              Int
+  feesBurn         Int
+  feesTreasury     Int
+  feesDev          Int      @default(0) // New dev fee field
+  feesWeeklyRewards Int     @default(0) // New weekly rewards field
+  payoutWinner     Int
+  winnerUserId     String?
+  winner           User?    @relation("winnerRelation", fields: [winnerUserId], references: [id])
+  replaySeed       String?
 
   @@map("match_results")
+}
+
+// New table for weekly leaderboard periods
+model WeeklyPeriod {
+  id        String   @id @default(cuid())
+  weekStart DateTime @unique // Monday 12am UTC
+  weekEnd   DateTime // Next Monday 12am UTC
+  createdAt DateTime @default(now())
+  
+  // Weekly stats
+  totalRewardsPool Int @default(0)
+  totalMatches     Int @default(0)
+  isDistributed    Boolean @default(false)
+  distributedAt    DateTime?
+  
+  // Relations
+  rewards WeeklyReward[]
+  
+  @@map("weekly_periods")
+}
+
+// Table for weekly reward distributions
+model WeeklyReward {
+  id       String @id @default(cuid())
+  
+  // Period reference
+  weeklyPeriodId String
+  weeklyPeriod   WeeklyPeriod @relation(fields: [weeklyPeriodId], references: [id])
+  
+  // User reference
+  userId   String
+  user     User   @relation("userWeeklyRewards", fields: [userId], references: [id])
+  
+  // Reward details
+  rank     Int    // 1-10 for top 10
+  points   Int    // Total points earned that week
+  rewardAmount Int // Tokens to be claimed
+  
+  // Claim status
+  isClaimed Boolean @default(false)
+  claimedAt DateTime?
+  
+  createdAt DateTime @default(now())
+  
+  @@unique([weeklyPeriodId, userId])
+  @@map("weekly_rewards")
+}
+
+// New table to track dev fee accumulation
+model DevReward {
+  id            String   @id @default(cuid())
+  createdAt     DateTime @default(now())
+  amount        Int      // Amount accumulated
+  isClaimed     Boolean  @default(false)
+  claimedAt     DateTime?
+  description   String?  // Optional description
+  
+  @@map("dev_rewards")
 }
