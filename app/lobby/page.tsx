@@ -1,15 +1,10 @@
-// app/lobby/page.tsx - COMPLETE FULL REWRITE
+// app/lobby/page.tsx - COMPLETE REWRITE WITH ZUSTAND WALLET
 "use client";
 import { useState, useEffect } from "react";
+import { useWallet } from "../../src/state/wallet";
 
 // Types
 type Move = 'R' | 'P' | 'S';
-
-interface User {
-  id: string;
-  displayName: string | null;
-  mockBalance: number;
-}
 
 interface Session {
   id: string;
@@ -40,49 +35,43 @@ interface GameResult {
 }
 
 export default function LobbyPage() {
-  // State
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const wallet = useWallet();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [gameResult, setGameResult] = useState<GameResult | null>(null);
 
-  // Get current user from URL parameter
+  // Initialize wallet on mount
   useEffect(() => {
-    const getCurrentUser = async () => {
-      try {
+    const initializeWallet = async () => {
+      if (!wallet.isConnected) {
+        // Determine user from URL parameter
         const urlParams = new URLSearchParams(window.location.search);
-        const userId = urlParams.get('user') || 'seed_alice';
+        const userParam = urlParams.get('user') || 'alice';
+        const userId = userParam === 'alice' ? 'seed_alice' : 'seed_bob';
         
-        console.log('Fetching user:', userId);
-        
-        const response = await fetch(`/api/user/${userId}`);
-        if (response.ok) {
-          const userData = await response.json();
-          console.log('User data:', userData);
-          setCurrentUser(userData);
-        } else {
-          throw new Error('Failed to fetch user');
+        try {
+          await wallet.switchUser(userId);
+        } catch (error) {
+          console.error('Failed to initialize wallet:', error);
+          setError('Failed to load wallet');
         }
-      } catch (err) {
-        console.error('Error fetching user:', err);
-        setError('Failed to load user data');
       }
     };
 
-    getCurrentUser();
-  }, []);
+    initializeWallet();
+  }, [wallet]);
 
-  // Load sessions when user is loaded
+  // Load sessions when wallet is connected
   useEffect(() => {
-    if (currentUser) {
+    if (wallet.isConnected) {
       loadSessions();
     }
-  }, [currentUser]);
+  }, [wallet.isConnected]);
 
   const loadSessions = async () => {
-    if (!currentUser) return;
+    if (!wallet.isConnected) return;
     
     setLoading(true);
     setError('');
@@ -101,10 +90,10 @@ export default function LobbyPage() {
       if (data.success && data.items) {
         // Filter to only open sessions that aren't created by current user
         const availableSessions = data.items.filter((session: Session) => 
-          session.status === 'OPEN' && session.creatorId !== currentUser.id
+          session.status === 'OPEN' && session.creatorId !== wallet.userId
         );
         
-        console.log('Available sessions for', currentUser.displayName, ':', availableSessions);
+        console.log('Available sessions for', wallet.displayName, ':', availableSessions);
         setSessions(availableSessions);
       } else {
         setSessions([]);
@@ -119,7 +108,7 @@ export default function LobbyPage() {
   };
 
   const handleJoinGame = (session: Session) => {
-    const balance = currentUser?.mockBalance || 0;
+    const balance = wallet.balance || 0;
     
     if (balance < session.totalStake) {
       alert(`Insufficient balance! You need ${session.totalStake.toLocaleString()} tokens but only have ${balance.toLocaleString()}.`);
@@ -134,13 +123,8 @@ export default function LobbyPage() {
     setGameResult(result);
     setSelectedSession(null);
     
-    // Update user balance
-    if (currentUser) {
-      setCurrentUser({
-        ...currentUser,
-        mockBalance: result.newBalance
-      });
-    }
+    // Update wallet balance
+    wallet.setBalance(result.newBalance);
   };
 
   const handleCloseResult = () => {
@@ -149,12 +133,12 @@ export default function LobbyPage() {
   };
 
   // Loading state
-  if (!currentUser && !error) {
+  if (!wallet.isConnected && !error) {
     return (
       <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
         <div className="text-center">
           <div className="text-2xl mb-2">⚡</div>
-          <div className="text-lg">Loading...</div>
+          <div className="text-lg">Loading wallet...</div>
         </div>
       </div>
     );
@@ -188,12 +172,12 @@ export default function LobbyPage() {
           <div className="bg-slate-800 rounded-lg px-6 py-3 inline-block">
             <div className="text-sm text-gray-400 mb-1">Playing as</div>
             <div className="text-lg font-medium text-blue-400">
-              {currentUser?.displayName || 'Unknown'}
+              {wallet.displayName || 'Unknown'}
             </div>
             <div className="text-sm">
               <span className="text-gray-400">Balance: </span>
               <span className="text-green-400 font-mono">
-                {(currentUser?.mockBalance || 0).toLocaleString()} tokens
+                {(wallet.balance || 0).toLocaleString()} tokens
               </span>
             </div>
           </div>
@@ -233,7 +217,7 @@ export default function LobbyPage() {
                 <SessionCard 
                   key={session.id}
                   session={session}
-                  currentUser={currentUser!}
+                  currentBalance={wallet.balance || 0}
                   onJoin={() => handleJoinGame(session)}
                 />
               ))}
@@ -246,7 +230,7 @@ export default function LobbyPage() {
       {selectedSession && (
         <JoinGameModal
           session={selectedSession}
-          currentUser={currentUser!}
+          wallet={wallet}
           onClose={() => setSelectedSession(null)}
           onComplete={handleGameComplete}
         />
@@ -266,15 +250,14 @@ export default function LobbyPage() {
 // Session Card Component
 function SessionCard({ 
   session, 
-  currentUser, 
+  currentBalance, 
   onJoin 
 }: { 
   session: Session;
-  currentUser: User;
+  currentBalance: number;
   onJoin: () => void;
 }) {
-  const balance = currentUser.mockBalance || 0;
-  const canAfford = balance >= session.totalStake;
+  const canAfford = currentBalance >= session.totalStake;
   const winAmount = Math.floor(session.totalStake * 2 * 0.95);
 
   return (
@@ -333,15 +316,15 @@ function SessionCard({
   );
 }
 
-// Join Game Modal
+// Join Game Modal Component
 function JoinGameModal({ 
   session, 
-  currentUser, 
+  wallet, 
   onClose, 
   onComplete 
 }: { 
   session: Session;
-  currentUser: User;
+  wallet: any;
   onClose: () => void;
   onComplete: (result: GameResult) => void;
 }) {
@@ -361,9 +344,10 @@ function JoinGameModal({
   };
 
   const isComplete = moves.filter(Boolean).length === session.rounds;
+  const canJoin = isComplete && wallet.balance >= session.totalStake;
 
   const handleSubmit = async () => {
-    if (!isComplete || submitting) return;
+    if (!canJoin || submitting) return;
 
     setSubmitting(true);
     setError('');
@@ -383,14 +367,14 @@ function JoinGameModal({
       const result = await response.json();
       console.log('Join result:', result);
 
-      if (response.ok && result.success) {
+      if (result.success) {
         onComplete(result);
       } else {
-        setError(result.error || 'Failed to join game');
+        throw new Error(result.error || 'Failed to join game');
       }
-    } catch (err) {
-      console.error('Join error:', err);
-      setError('Network error occurred');
+    } catch (error: any) {
+      console.error('Join game error:', error);
+      setError(error.message || 'Failed to join game');
     } finally {
       setSubmitting(false);
     }
@@ -398,10 +382,11 @@ function JoinGameModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-slate-800 rounded-xl p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto">
+      <div className="bg-slate-800 rounded-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
+        {/* Header */}
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-xl font-bold">Join Game</h2>
-          <button 
+          <button
             onClick={onClose}
             className="text-gray-400 hover:text-white text-2xl"
           >
@@ -411,47 +396,47 @@ function JoinGameModal({
 
         {/* Game Info */}
         <div className="bg-white/5 rounded-lg p-4 mb-6">
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <div className="text-gray-400">Opponent</div>
-              <div className="font-medium">{session.creator}</div>
+          <div className="text-sm space-y-2">
+            <div className="flex justify-between">
+              <span>Opponent:</span>
+              <span className="font-medium">{session.creator}</span>
             </div>
-            <div>
-              <div className="text-gray-400">Rounds</div>
-              <div className="font-medium">{session.rounds}</div>
+            <div className="flex justify-between">
+              <span>Rounds:</span>
+              <span className="font-medium">{session.rounds}</span>
             </div>
-            <div>
-              <div className="text-gray-400">Your Stake</div>
-              <div className="font-mono text-red-400">
-                {session.totalStake.toLocaleString()}
-              </div>
+            <div className="flex justify-between">
+              <span>Your Stake:</span>
+              <span className="font-mono">{session.totalStake.toLocaleString()} RPS</span>
             </div>
-            <div>
-              <div className="text-gray-400">If You Win</div>
-              <div className="font-mono text-green-400">
-                {Math.floor(session.totalStake * 2 * 0.95).toLocaleString()}
-              </div>
+            <div className="flex justify-between">
+              <span>Total Pot:</span>
+              <span className="font-mono">{(session.totalStake * 2).toLocaleString()} RPS</span>
+            </div>
+            <div className="flex justify-between text-green-400">
+              <span>Winner Gets:</span>
+              <span className="font-mono">
+                {Math.floor(session.totalStake * 2 * 0.95).toLocaleString()} RPS
+              </span>
             </div>
           </div>
         </div>
 
         {/* Move Selection */}
         <div className="mb-6">
-          <h3 className="font-medium mb-4">Select Your Moves</h3>
+          <div className="text-sm font-medium mb-4">Select Your Moves for Each Round:</div>
+          
           <div className="space-y-4">
             {Array.from({ length: session.rounds }, (_, roundIndex) => (
-              <div key={roundIndex} className="bg-white/5 rounded-lg p-4">
-                <div className="text-sm text-gray-400 mb-3">
-                  Round {roundIndex + 1}
-                </div>
+              <div key={roundIndex} className="space-y-3">
+                <div className="text-sm text-gray-400">Round {roundIndex + 1}</div>
                 
-                <div className="grid grid-cols-3 gap-3 mb-3">
+                <div className="grid grid-cols-3 gap-2">
                   {moveOptions.map((move) => (
                     <button
                       key={move}
                       onClick={() => handleMoveSelect(roundIndex, move)}
-                      disabled={submitting}
-                      className={`py-3 px-2 rounded-lg text-sm font-medium transition-colors ${
+                      className={`p-3 rounded-lg text-center transition-colors ${
                         moves[roundIndex] === move
                           ? 'bg-blue-600 text-white border-2 border-blue-400'
                           : 'bg-white/10 hover:bg-white/20 border-2 border-transparent'
@@ -492,6 +477,19 @@ function JoinGameModal({
           </div>
         </div>
 
+        {/* Balance Check */}
+        <div className="bg-white/5 rounded-lg p-3 mb-6">
+          <div className="flex justify-between text-sm">
+            <span>Your Balance:</span>
+            <span className={`font-mono ${wallet.balance >= session.totalStake ? 'text-green-400' : 'text-red-400'}`}>
+              {wallet.balance.toLocaleString()} RPS
+            </span>
+          </div>
+          {wallet.balance < session.totalStake && (
+            <p className="text-red-400 text-xs mt-1">Insufficient balance to join this game</p>
+          )}
+        </div>
+
         {/* Error */}
         {error && (
           <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 mb-6">
@@ -508,11 +506,12 @@ function JoinGameModal({
           >
             Cancel
           </button>
+          
           <button
             onClick={handleSubmit}
-            disabled={!isComplete || submitting}
+            disabled={!canJoin || submitting}
             className={`flex-1 py-3 rounded-lg font-medium transition-colors ${
-              isComplete && !submitting
+              canJoin && !submitting
                 ? 'bg-blue-600 hover:bg-blue-700 text-white'
                 : 'bg-gray-600 text-gray-400 cursor-not-allowed'
             }`}
@@ -520,6 +519,19 @@ function JoinGameModal({
             {submitting ? 'Joining...' : 'Join Game'}
           </button>
         </div>
+
+        {/* Error Messages */}
+        {!canJoin && moves.filter(Boolean).length === session.rounds && (
+          <p className="text-red-400 text-sm text-center mt-3">
+            Insufficient balance to join this game
+          </p>
+        )}
+
+        {!canJoin && moves.filter(Boolean).length !== session.rounds && (
+          <p className="text-yellow-400 text-sm text-center mt-3">
+            Please select moves for all rounds
+          </p>
+        )}
       </div>
     </div>
   );
@@ -595,14 +607,15 @@ function GameResultModal({
                 
                 return (
                   <div key={index} className="flex justify-between items-center text-sm">
-                    <span className="text-gray-400">R{index + 1}</span>
-                    <div className="flex items-center gap-3">
-                      <span className="text-lg">{moveEmojis[myMove]}</span>
-                      <span className="text-gray-400 text-xs">VS</span>
-                      <span className="text-lg">{moveEmojis[oppMove]}</span>
-                      <span className={`font-medium ml-2 min-w-[40px] text-center ${
+                    <span className="text-gray-400">Round {index + 1}:</span>
+                    <div className="flex items-center gap-2">
+                      <span>{moveEmojis[myMove]}</span>
+                      <span className="text-gray-400">vs</span>
+                      <span>{moveEmojis[oppMove]}</span>
+                      <span className={`ml-2 font-medium ${
                         roundResult === 'Win' ? 'text-green-400' :
-                        roundResult === 'Loss' ? 'text-red-400' : 'text-yellow-400'
+                        roundResult === 'Loss' ? 'text-red-400' :
+                        'text-yellow-400'
                       }`}>
                         {roundResult}
                       </span>
@@ -614,19 +627,12 @@ function GameResultModal({
           </div>
         )}
 
-        {/* Message */}
-        {result.message && (
-          <div className="bg-blue-500/20 rounded-lg p-3 mb-6 text-center text-blue-300 text-sm">
-            {result.message}
-          </div>
-        )}
-
         {/* Close Button */}
         <button
           onClick={onClose}
           className="w-full py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium transition-colors"
         >
-          Close & Continue
+          Close
         </button>
       </div>
     </div>
