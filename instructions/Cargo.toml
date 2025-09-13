@@ -1,0 +1,272 @@
+// Cargo.toml - Anchor workspace configuration
+[workspace]
+members = [
+    "programs/*"
+]
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
+
+[profile.release.build-override]
+opt-level = 3
+incremental = false
+codegen-units = 1
+
+// programs/solrps/Cargo.toml
+[package]
+name = "solrps"
+version = "0.1.0"
+description = "Rock Paper Scissors on Solana"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "solrps"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+
+[dependencies]
+anchor-lang = "0.30.1"
+anchor-spl = "0.30.1"
+solana-program = "1.18.18"
+
+// programs/solrps/src/lib.rs - Main program entrypoint
+use anchor_lang::prelude::*;
+use anchor_spl::token::{Token, TokenAccount, Transfer};
+
+pub mod instructions;
+pub mod state;
+pub mod errors;
+
+use instructions::*;
+use state::*;
+use errors::*;
+
+declare_id!("SoLRPSxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"); // Will be replaced with actual program ID
+
+#[program]
+pub mod solrps {
+    use super::*;
+
+    /// Create a new game session
+    pub fn create_game(
+        ctx: Context<CreateGame>,
+        game_id: [u8; 8],           // Unique game identifier
+        rounds: u8,                 // 1, 3, or 5 rounds
+        stake_per_round: u64,       // Amount to stake per round
+        commitment: [u8; 32],       // SHA-256 hash of moves + salt
+    ) -> Result<()> {
+        instructions::create_game::handler(ctx, game_id, rounds, stake_per_round, commitment)
+    }
+
+    /// Join an existing game
+    pub fn join_game(
+        ctx: Context<JoinGame>,
+        commitment: [u8; 32],       // Challenger's commitment
+    ) -> Result<()> {
+        instructions::join_game::handler(ctx, commitment)
+    }
+
+    /// Reveal moves for a player
+    pub fn reveal_moves(
+        ctx: Context<RevealMoves>,
+        moves: Vec<u8>,             // Actual moves (1=Rock, 2=Paper, 3=Scissors)
+        salt: [u8; 32],             // Original salt for verification
+    ) -> Result<()> {
+        instructions::reveal_moves::handler(ctx, moves, salt)
+    }
+
+    /// Claim prize after game completion or forfeit
+    pub fn claim_prize(
+        ctx: Context<ClaimPrize>,
+    ) -> Result<()> {
+        instructions::claim_prize::handler(ctx)
+    }
+
+    /// Emergency forfeit if opponent doesn't reveal
+    pub fn forfeit_game(
+        ctx: Context<ForfeitGame>,
+    ) -> Result<()> {
+        instructions::forfeit_game::handler(ctx)
+    }
+}
+
+// programs/solrps/src/state/mod.rs - Game state definitions
+pub mod game;
+pub mod user_profile;
+
+pub use game::*;
+pub use user_profile::*;
+
+// programs/solrps/src/state/game.rs - Core game state
+use anchor_lang::prelude::*;
+
+#[account]
+pub struct Game {
+    pub game_id: [u8; 8],              // Unique identifier
+    pub creator: Pubkey,               // Game creator's wallet
+    pub challenger: Option<Pubkey>,     // Challenger's wallet (None until joined)
+    
+    // Game configuration
+    pub rounds: u8,                    // Number of rounds (1, 3, or 5)
+    pub stake_per_round: u64,          // Stake amount per round
+    pub total_pot: u64,                // Total prize pool
+    
+    // Commitments (SHA-256 hashes)
+    pub creator_commitment: [u8; 32],   // Creator's move commitment
+    pub challenger_commitment: Option<[u8; 32]>, // Challenger's commitment
+    
+    // Revealed moves
+    pub creator_moves: Option<Vec<u8>>, // Creator's actual moves
+    pub challenger_moves: Option<Vec<u8>>, // Challenger's actual moves
+    
+    // Game status and timing
+    pub status: GameStatus,
+    pub created_at: i64,               // Unix timestamp
+    pub joined_at: Option<i64>,        // When challenger joined
+    pub reveal_deadline: Option<i64>,   // Deadline for reveals
+    
+    // Results
+    pub winner: Option<Pubkey>,        // Winner's wallet (None for draw)
+    pub round_results: Vec<RoundResult>, // Individual round outcomes
+    pub fees_collected: u64,           // Total fees taken
+    
+    // Metadata
+    pub bump: u8,                      // PDA bump seed
+}
+
+impl Game {
+    pub const LEN: usize = 8 + // discriminator
+        8 +                    // game_id
+        32 +                   // creator
+        (1 + 32) +            // challenger (Option<Pubkey>)
+        1 +                    // rounds
+        8 +                    // stake_per_round
+        8 +                    // total_pot
+        32 +                   // creator_commitment
+        (1 + 32) +            // challenger_commitment
+        (1 + 4 + 5) +         // creator_moves (Vec<u8> max 5 rounds)
+        (1 + 4 + 5) +         // challenger_moves
+        1 +                    // status
+        8 +                    // created_at
+        (1 + 8) +             // joined_at
+        (1 + 8) +             // reveal_deadline
+        (1 + 32) +            // winner
+        (4 + 5 * 3) +         // round_results (Vec<RoundResult>)
+        8 +                    // fees_collected
+        1 +                    // bump
+        100;                   // padding for future updates
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
+pub enum GameStatus {
+    WaitingForChallenger,  // Game created, waiting for opponent
+    WaitingForReveals,     // Both players committed, reveal phase
+    CreatorRevealed,       // Only creator revealed moves
+    ChallengerRevealed,    // Only challenger revealed moves
+    Complete,              // Game finished, winner determined
+    Forfeited,            // One player forfeited
+    Expired,              // Reveal deadline passed
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
+pub struct RoundResult {
+    pub creator_move: u8,      // 1=Rock, 2=Paper, 3=Scissors
+    pub challenger_move: u8,   // 1=Rock, 2=Paper, 3=Scissors
+    pub winner: RoundWinner,   // Who won this round
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
+pub enum RoundWinner {
+    Creator,
+    Challenger,
+    Draw,
+}
+
+// programs/solrps/src/state/user_profile.rs - Optional user stats
+use anchor_lang::prelude::*;
+
+#[account]
+pub struct UserProfile {
+    pub owner: Pubkey,             // User's wallet
+    pub games_played: u64,         // Total games participated
+    pub games_won: u64,            // Games won
+    pub total_winnings: u64,       // Total tokens won
+    pub total_fees_paid: u64,      // Total fees paid
+    pub created_at: i64,           // Profile creation time
+    pub bump: u8,                  // PDA bump
+}
+
+impl UserProfile {
+    pub const LEN: usize = 8 + // discriminator
+        32 +                   // owner
+        8 +                    // games_played
+        8 +                    // games_won
+        8 +                    // total_winnings
+        8 +                    // total_fees_paid
+        8 +                    // created_at
+        1 +                    // bump
+        50;                    // padding
+}
+
+// programs/solrps/src/errors.rs - Custom error types
+use anchor_lang::prelude::*;
+
+#[error_code]
+pub enum GameError {
+    #[msg("Invalid number of rounds. Must be 1, 3, or 5.")]
+    InvalidRounds,
+    
+    #[msg("Invalid stake amount. Must be greater than 0.")]
+    InvalidStake,
+    
+    #[msg("Game is not in the correct status for this operation.")]
+    InvalidGameStatus,
+    
+    #[msg("Invalid move. Must be 1 (Rock), 2 (Paper), or 3 (Scissors).")]
+    InvalidMove,
+    
+    #[msg("Wrong number of moves provided.")]
+    InvalidMoveCount,
+    
+    #[msg("Commitment verification failed. Hash doesn't match.")]
+    CommitmentVerificationFailed,
+    
+    #[msg("Player is not authorized for this operation.")]
+    Unauthorized,
+    
+    #[msg("Game has expired. Reveal deadline has passed.")]
+    GameExpired,
+    
+    #[msg("Cannot join your own game.")]
+    CannotJoinOwnGame,
+    
+    #[msg("Insufficient balance for stake.")]
+    InsufficientBalance,
+    
+    #[msg("Reveal deadline has not passed yet.")]
+    RevealDeadlineNotPassed,
+    
+    #[msg("Arithmetic overflow occurred.")]
+    ArithmeticOverflow,
+}
+
+// programs/solrps/src/instructions/mod.rs
+pub mod create_game;
+pub mod join_game;
+pub mod reveal_moves;
+pub mod claim_prize;
+pub mod forfeit_game;
+
+pub use create_game::*;
+pub use join_game::*;
+pub use reveal_moves::*;
+pub use claim_prize::*;
+pub use forfeit_game::*;
