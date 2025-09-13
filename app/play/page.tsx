@@ -24,6 +24,7 @@ export default function PlayPage() {
   const [isPrivate, setIsPrivate] = useState(false);
   const [createdSessions, setCreatedSessions] = useState<SessionCard[]>([]);
   const [isCreating, setIsCreating] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [showSuccessDialog, setShowSuccessDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showDeleteSuccessDialog, setShowDeleteSuccessDialog] = useState(false);
@@ -42,6 +43,13 @@ export default function PlayPage() {
     }
   }, [wallet.userId]);
 
+  // Check for resolved games every time component mounts
+  useEffect(() => {
+    if (wallet.userId && createdSessions.length > 0) {
+      checkForResolvedGames();
+    }
+  }, [createdSessions, wallet.userId]);
+
   const loadPersistentGames = () => {
     if (!wallet.userId) return;
     
@@ -55,6 +63,62 @@ export default function PlayPage() {
       }
     } catch (error) {
       console.error('Failed to load persistent games:', error);
+    }
+  };
+
+  const checkForResolvedGames = async () => {
+    if (!wallet.userId || createdSessions.length === 0) return;
+
+    try {
+      // Check each session's current status
+      const updatedSessions = [];
+      
+      for (const session of createdSessions) {
+        try {
+          const response = await fetch(`/api/session/${session.id}`);
+          if (response.ok) {
+            const sessionData = await response.json();
+            
+            // If session is resolved, don't include it
+            if (sessionData.status !== 'RESOLVED') {
+              updatedSessions.push({ ...session, status: sessionData.status });
+            }
+          }
+        } catch (error) {
+          // If session doesn't exist anymore, remove it
+          continue;
+        }
+      }
+
+      // Only update if there's a change
+      if (updatedSessions.length !== createdSessions.length) {
+        setCreatedSessions(updatedSessions);
+        savePersistentGames(updatedSessions);
+      }
+      
+    } catch (error) {
+      console.error('Failed to check resolved games:', error);
+    }
+  };
+
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      // Check for resolved games
+      await checkForResolvedGames();
+      
+      // Force refresh balance too
+      if (wallet.userId) {
+        const userResponse = await fetch(`/api/user/${wallet.userId}`);
+        if (userResponse.ok) {
+          const userData = await userResponse.json();
+          wallet.setBalance(userData.balance);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to refresh:', error);
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -117,6 +181,9 @@ export default function PlayPage() {
         stakePerRound: selectedStake,
         commitHash: commitHash,
         isPrivate,
+        // For instant resolution: include moves and salt
+        moves: selectedMoves,
+        salt: salt
       };
 
       const response = await fetch('/api/session/create', {
@@ -470,7 +537,20 @@ export default function PlayPage() {
 
         {/* Created Sessions */}
         <div className="bg-slate-800 rounded-xl p-6">
-          <h2 className="text-xl font-semibold mb-4">Your Games</h2>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-semibold">Your Games</h2>
+            <button
+              onClick={handleManualRefresh}
+              disabled={isRefreshing}
+              className={`px-3 py-1 text-xs rounded transition-colors ${
+                isRefreshing
+                  ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                  : 'bg-blue-600 hover:bg-blue-700 text-white'
+              }`}
+            >
+              {isRefreshing ? '⟳ Refreshing...' : '🔄 Refresh'}
+            </button>
+          </div>
           
           {createdSessions.length === 0 ? (
             <p className="text-gray-400 text-center py-8">
