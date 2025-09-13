@@ -1,4 +1,4 @@
-// app/api/weekly/distribute/route.ts
+// app/api/weekly/distribute/route.ts - UPDATED FOR ANTI-SYBIL
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { isWeeklyPeriodComplete, getWeeklyLeaderboard } from "@/lib/weekly";
@@ -31,17 +31,39 @@ export async function POST(req: Request) {
         throw new Error("Weekly period is not yet complete");
       }
 
-      // Get weekly leaderboard
-      const leaderboard = await getWeeklyLeaderboard(tx, weeklyPeriodId);
+      // Get weekly leaderboard with anti-sybil filtering
+      const leaderboardResult = await getWeeklyLeaderboard(tx, weeklyPeriodId);
+      const { leaderboard, ineligiblePlayers, stats } = leaderboardResult;
       
       if (leaderboard.length === 0) {
-        throw new Error("No eligible players for rewards");
+        // Log why no one is eligible
+        console.log("🚨 NO ELIGIBLE PLAYERS FOR WEEKLY REWARDS:");
+        console.log(`   - Total players: ${stats.totalPlayers}`);
+        console.log(`   - Ineligible: ${stats.ineligiblePlayers}`);
+        
+        // Mark period as distributed even with no rewards
+        await tx.weeklyPeriod.update({
+          where: { id: weeklyPeriodId },
+          data: {
+            isDistributed: true,
+            distributedAt: new Date()
+          }
+        });
+        
+        return {
+          period,
+          leaderboard: [],
+          rewards: [],
+          totalDistributed: 0,
+          ineligiblePlayers,
+          stats
+        };
       }
 
       // Calculate reward distribution
       const rewardAmounts = calculateWeeklyRewardDistribution(period.totalRewardsPool);
       
-      // Create weekly reward records for top 10
+      // Create weekly reward records for eligible top 10
       const rewards = [];
       for (let i = 0; i < Math.min(leaderboard.length, 10); i++) {
         const player = leaderboard[i];
@@ -71,18 +93,35 @@ export async function POST(req: Request) {
         }
       });
 
+      // Log successful distribution with anti-sybil stats
+      console.log(`✅ WEEKLY REWARDS DISTRIBUTED: ${rewards.length} players`);
+      console.log(`   - Total players: ${stats.totalPlayers}`);
+      console.log(`   - Eligible: ${stats.eligiblePlayers}`);
+      console.log(`   - Ineligible (anti-sybil): ${stats.ineligiblePlayers}`);
+
       return {
         period,
         leaderboard,
         rewards,
-        totalDistributed: rewardAmounts.reduce((sum, amount) => sum + amount, 0)
+        totalDistributed: rewardAmounts.slice(0, rewards.length).reduce((sum, amount) => sum + amount, 0),
+        ineligiblePlayers,
+        stats
       };
     });
 
     return NextResponse.json({
       success: true,
-      message: `Distributed ${result.totalDistributed} tokens to ${result.rewards.length} players`,
-      ...result
+      message: `Distributed ${result.totalDistributed} tokens to ${result.rewards.length} eligible players`,
+      ...result,
+      antiSybilReport: {
+        totalPlayers: result.stats.totalPlayers,
+        eligiblePlayers: result.stats.eligiblePlayers,
+        ineligiblePlayers: result.stats.ineligiblePlayers,
+        ineligibleReasons: result.ineligiblePlayers.map((p: any) => ({
+          displayName: p.displayName,
+          reasons: p.ineligibilityReasons
+        }))
+      }
     });
 
   } catch (error: any) {

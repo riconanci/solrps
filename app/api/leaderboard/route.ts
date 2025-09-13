@@ -1,8 +1,45 @@
-// app/api/leaderboard/route.ts - ENHANCED WITH WEEKLY REWARDS
+// app/api/leaderboard/route.ts - ENHANCED WITH ANTI-SYBIL WEEKLY REWARDS
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getUserOrSeed } from "../_utils";
-import { getCurrentWeekStart, getCurrentWeekEnd, formatWeekDisplay } from "@/lib/weekly";
+import { getCurrentWeekStart, getCurrentWeekEnd, formatWeekDisplay, getWeeklyLeaderboard } from "@/lib/weekly";
+
+// Type definitions for better TypeScript support
+interface WeeklyPlayer {
+  userId: string;
+  displayName: string;
+  points: number;
+  totalWinnings: number;
+  matchesWon: number;
+  matchesPlayed: number;
+  uniqueOpponentsCount: number;
+  maxWinsFromSingleOpponent: number;
+  winShareFromSingleOpponent: number;
+  isEligible: boolean;
+  ineligibilityReasons: string[];
+}
+
+interface WeeklyStats {
+  totalPlayers: number;
+  eligiblePlayers: number;
+  ineligiblePlayers: number;
+}
+
+interface LeaderboardResult {
+  leaderboard: WeeklyPlayer[];
+  ineligiblePlayers: WeeklyPlayer[];
+  stats: WeeklyStats;
+}
+
+interface RegularPlayer {
+  userId: string;
+  displayName: string;
+  totalWins: number;
+  totalEarnings: number;
+  gamesWon: number;
+  gamesLost: number;
+  totalStaked: number;
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -21,72 +58,25 @@ export async function GET(req: NextRequest) {
       dateFilter = { createdAt: { gte: monthAgo } };
     }
 
-    // GET WEEKLY REWARDS DATA
+    // GET WEEKLY REWARDS DATA WITH ANTI-SYBIL FILTERING
     const weekStart = getCurrentWeekStart();
     const weekEnd = getCurrentWeekEnd(weekStart);
 
-    // Get current weekly period
-    const currentWeeklyPeriod = await prisma.weeklyPeriod.findUnique({
+    // Get or create current weekly period
+    let currentWeeklyPeriod = await prisma.weeklyPeriod.findUnique({
       where: { weekStart }
     });
 
-    // Get weekly leaderboard (current week points)
-    let weeklyLeaderboard = [];
+    // Get weekly leaderboard with anti-sybil filtering
+    let weeklyLeaderboard: WeeklyPlayer[] = [];
+    let weeklyStats: WeeklyStats | null = null;
+    let ineligiblePlayers: WeeklyPlayer[] = [];
+    
     if (currentWeeklyPeriod) {
-      const weeklyResults = await prisma.matchResult.findMany({
-        where: {
-          createdAt: {
-            gte: weekStart,
-            lt: weekEnd
-          },
-          winnerUserId: { not: null }
-        },
-        include: {
-          session: {
-            include: {
-              creator: { select: { id: true, displayName: true } },
-              challenger: { select: { id: true, displayName: true } }
-            }
-          }
-        }
-      });
-
-      // Calculate weekly points
-      const userStats = new Map();
-      
-      for (const result of weeklyResults) {
-        const winnerId = result.winnerUserId!;
-        const session = result.session;
-        
-        let winnerName = `User ${winnerId.slice(0, 8)}`;
-        if (session.creator.id === winnerId) {
-          winnerName = session.creator.displayName || winnerName;
-        } else if (session.challenger?.id === winnerId) {
-          winnerName = session.challenger.displayName || winnerName;
-        }
-
-        if (!userStats.has(winnerId)) {
-          userStats.set(winnerId, {
-            userId: winnerId,
-            displayName: winnerName,
-            points: 0,
-            totalWinnings: 0,
-            matchesWon: 0
-          });
-        }
-
-        const stats = userStats.get(winnerId);
-        stats.matchesWon++;
-        stats.totalWinnings += result.payoutWinner;
-        // Points: 10 per win + bonus for payout amount
-        stats.points += 10 + Math.floor(result.payoutWinner / 100);
-      }
-
-      weeklyLeaderboard = Array.from(userStats.values())
-        .sort((a, b) => {
-          if (a.points !== b.points) return b.points - a.points;
-          return b.totalWinnings - a.totalWinnings;
-        });
+      const leaderboardResult: LeaderboardResult = await getWeeklyLeaderboard(prisma, currentWeeklyPeriod.id);
+      weeklyLeaderboard = leaderboardResult.leaderboard;
+      ineligiblePlayers = leaderboardResult.ineligiblePlayers;
+      weeklyStats = leaderboardResult.stats;
     }
 
     // Get user's claimable weekly rewards
@@ -114,7 +104,7 @@ export async function GET(req: NextRequest) {
       take: 5 // Last 5 claimed rewards
     });
 
-    // GET REGULAR LEADERBOARD DATA
+    // GET REGULAR LEADERBOARD DATA (all-time/filtered)
     const results = await prisma.matchResult.findMany({
       where: {
         ...dateFilter,
@@ -131,7 +121,7 @@ export async function GET(req: NextRequest) {
     });
 
     // Calculate regular stats per user
-    const userStats = new Map();
+    const userStats = new Map<string, RegularPlayer>();
 
     for (const result of results) {
       const winnerId = result.winnerUserId!;
@@ -156,7 +146,7 @@ export async function GET(req: NextRequest) {
         });
       }
 
-      const stats = userStats.get(winnerId);
+      const stats = userStats.get(winnerId)!;
       stats.totalWins++;
       stats.totalEarnings += result.payoutWinner;
       stats.gamesWon++;
@@ -189,7 +179,7 @@ export async function GET(req: NextRequest) {
           });
         }
 
-        const stats = userStats.get(loserId);
+        const stats = userStats.get(loserId)!;
         stats.gamesLost++;
         stats.totalStaked += session.totalStake;
       }
@@ -224,7 +214,7 @@ export async function GET(req: NextRequest) {
       success: true,
       timeframe,
       
-      // WEEKLY REWARDS DATA
+      // WEEKLY REWARDS DATA WITH ANTI-SYBIL
       weeklyRewards: {
         currentPeriod: currentWeeklyPeriod ? {
           id: currentWeeklyPeriod.id,
@@ -234,7 +224,26 @@ export async function GET(req: NextRequest) {
           isDistributed: currentWeeklyPeriod.isDistributed
         } : null,
         
-        weeklyLeaderboard: weeklyLeaderboard.slice(0, 10), // Top 10
+        weeklyLeaderboard: weeklyLeaderboard.slice(0, 10), // Top 10 eligible
+        
+        // Anti-sybil transparency info
+        antiSybilStats: weeklyStats ? {
+          totalPlayers: weeklyStats.totalPlayers,
+          eligiblePlayers: weeklyStats.eligiblePlayers,
+          ineligiblePlayers: weeklyStats.ineligiblePlayers,
+          blockRate: weeklyStats.totalPlayers > 0 
+            ? Math.round((weeklyStats.ineligiblePlayers / weeklyStats.totalPlayers) * 100) 
+            : 0
+        } : null,
+        
+        // Show ineligible players for transparency (admin view)
+        ineligiblePlayers: ineligiblePlayers.slice(0, 5).map((player: WeeklyPlayer) => ({
+          displayName: player.displayName,
+          points: player.points,
+          uniqueOpponentsCount: player.uniqueOpponentsCount,
+          winShareFromSingleOpponent: player.winShareFromSingleOpponent,
+          reasons: player.ineligibilityReasons
+        })),
         
         claimableRewards: claimableWeeklyRewards.map((reward: any) => ({
           id: reward.id,
