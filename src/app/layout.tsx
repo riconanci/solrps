@@ -1,7 +1,7 @@
 // app/layout.tsx
 import "./globals.css";
 import { ReactNode } from "react";
-import { Navigation } from "../src/components/Navigation";
+import { Navigation } from "@/components/Navigation";
 
 export const metadata = {
   title: 'SolRPS - Rock Paper Scissors on Solana',
