@@ -46,14 +46,9 @@ export default function LobbyPage() {
     }
   }, [wallet]);
 
+  // Load sessions on initial page load only - REMOVED auto-refresh interval
   useEffect(() => {
     loadPublicSessions();
-    // Refresh every 5 seconds to show new games
-    const interval = setInterval(() => {
-      loadPublicSessions();
-      setLastRefresh(Date.now());
-    }, 5000);
-    return () => clearInterval(interval);
   }, []);
 
   const loadPublicSessions = async () => {
@@ -86,6 +81,7 @@ export default function LobbyPage() {
       setPublicSessions([]);
     } finally {
       setLoading(false);
+      setLastRefresh(Date.now()); // Update refresh timestamp
     }
   };
 
@@ -150,7 +146,6 @@ export default function LobbyPage() {
 
   const refreshSessions = () => {
     loadPublicSessions();
-    setLastRefresh(Date.now());
   };
 
   if (!wallet.userId) {
@@ -224,8 +219,9 @@ export default function LobbyPage() {
             <button
               onClick={refreshSessions}
               className="px-4 py-2 text-sm bg-gray-600 hover:bg-gray-700 rounded-lg transition-colors"
+              title="Refresh available games"
             >
-              Refresh
+              🔄 Refresh
             </button>
           </div>
         </div>
@@ -307,7 +303,7 @@ export default function LobbyPage() {
           onGameComplete={(result) => {
             setGameResult(result);
             setSelectedSession(null);
-            // Don't refresh here - let the interval handle it
+            // Manual refresh after game completion instead of auto-refresh
           }}
         />
       )}
@@ -347,62 +343,84 @@ function JoinGameModal({
     return emojis[move as keyof typeof emojis] || '?';
   };
 
-  const selectMove = (roundIndex: number, move: string) => {
-    const newMoves = [...selectedMoves];
-    newMoves[roundIndex] = move;
-    setSelectedMoves(newMoves);
-    setError(''); // Clear error when user makes changes
-  };
-
+  const moves = ['R', 'P', 'S'];
   const canJoin = selectedMoves.filter(Boolean).length === session.rounds && 
                  (wallet.balance || 0) >= session.totalStake;
 
-  const handleJoinGame = async () => {
-    if (!canJoin) return;
+  const handleMoveSelect = (roundIndex: number, move: string) => {
+    if (isSubmitting) return;
+    
+    const newMoves = [...selectedMoves];
+    newMoves[roundIndex] = move;
+    setSelectedMoves(newMoves);
+    setError('');
+  };
 
+  const handleJoinGame = async () => {
+    if (!canJoin || isSubmitting) return;
+    
     setIsSubmitting(true);
     setError('');
     
     try {
+      // Generate salt and create commit hash
+      const salt = Math.random().toString(36).substring(2, 15);
+      const movesString = selectedMoves.join(',');
+      const preimage = `${movesString}|${salt}`;
+      const encoder = new TextEncoder();
+      const data = encoder.encode(preimage);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const commitHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+      
+      // Store in localStorage for reveal
+      localStorage.setItem(`game_${session.id}_moves`, movesString);
+      localStorage.setItem(`game_${session.id}_salt`, salt);
+      
       const response = await fetch('/api/session/join', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sessionId: session.id,
-          challengerMoves: selectedMoves,
-          userId: wallet.userId,
+          challengerMoves: movesString,
+          salt: salt,
+          commitHash: commitHash
         }),
       });
 
-      const responseText = await response.text();
-      console.log('Join response:', response.status, responseText);
-
-      if (!response.ok) {
-        let errorMessage = 'Failed to join game';
-        try {
-          const errorData = JSON.parse(responseText);
-          errorMessage = errorData.error || errorMessage;
-        } catch (e) {
-          errorMessage = responseText || errorMessage;
-        }
-        throw new Error(errorMessage);
-      }
-
-      const result = JSON.parse(responseText);
-      console.log('Join result:', result);
-
-      // Handle instant resolution (Phase 1 behavior)
-      if (result.gameResolved && result.result) {
-        onGameComplete(result.result);
+      if (response.ok) {
+        const result = await response.json();
+        console.log('Join game result:', result);
+        
+        // Update wallet balance
+        wallet.setBalance(result.newBalance || wallet.balance);
+        
+        // Prepare game result data
+        const gameResult: GameResult = {
+          didWin: result.didWin || false,
+          isDraw: result.isDraw || false,
+          didLose: result.didLose || false,
+          myMoves: selectedMoves,
+          opponentMoves: result.opponentMoves || [],
+          myWins: result.myWins || 0,
+          opponentWins: result.opponentWins || 0,
+          draws: result.draws || 0,
+          stakeAmount: session.totalStake,
+          balanceChange: result.balanceChange || 0,
+          newBalance: result.newBalance || wallet.balance || 0,
+          pot: session.totalStake * 2,
+          opponent: session.creator,
+          rounds: session.rounds
+        };
+        
+        onGameComplete(gameResult);
       } else {
-        // Game joined but not resolved yet
-        alert('Game joined successfully! Waiting for resolution...');
-        onClose();
+        const errorData = await response.json();
+        setError(errorData.error || 'Failed to join game');
       }
-      
     } catch (error: any) {
-      console.error('Failed to join game:', error);
-      setError(error.message);
+      console.error('Join game error:', error);
+      setError('Network error. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -412,93 +430,56 @@ function JoinGameModal({
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-slate-800 rounded-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-xl font-bold">Join Game</h2>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-white text-2xl"
-          >
-            ×
-          </button>
+        <div className="text-center mb-6">
+          <h2 className="text-xl font-bold mb-2">Join Game</h2>
+          <div className="text-sm text-gray-400">
+            vs {session.creator} • {session.rounds} Round{session.rounds > 1 ? 's' : ''}
+          </div>
+          <div className="text-lg font-mono mt-1">
+            {session.totalStake.toLocaleString()} RPS at stake
+          </div>
         </div>
 
         {/* Error Display */}
         {error && (
-          <div className="mb-4 p-3 bg-red-900/20 border border-red-500/30 rounded-lg">
-            <p className="text-red-400 text-sm">{error}</p>
+          <div className="bg-red-500/20 border border-red-500 rounded-lg p-3 mb-4">
+            <div className="text-sm text-red-200">{error}</div>
           </div>
         )}
 
-        {/* Game Info */}
-        <div className="bg-white/5 rounded-lg p-4 mb-6">
-          <div className="text-sm space-y-2">
-            <div className="flex justify-between">
-              <span>Creator:</span>
-              <span className="font-medium">{session.creator}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Rounds:</span>
-              <span className="font-medium">{session.rounds}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Your Stake:</span>
-              <span className="font-mono">{session.totalStake.toLocaleString()} RPS</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Total Pot:</span>
-              <span className="font-mono">{(session.totalStake * 2).toLocaleString()} RPS</span>
-            </div>
-            <div className="flex justify-between text-green-400">
-              <span>Winner Gets:</span>
-              <span className="font-mono">
-                {Math.floor(session.totalStake * 2 * 0.95).toLocaleString()} RPS
-              </span>
-            </div>
-          </div>
-        </div>
-
         {/* Move Selection */}
         <div className="mb-6">
-          <div className="flex justify-between items-center mb-3">
-            <span className="text-sm font-medium">Select Your Moves</span>
-            <span className="text-sm text-gray-400">
-              {selectedMoves.filter(Boolean).length}/{session.rounds}
-            </span>
-          </div>
-          
+          <div className="text-sm font-medium mb-3">Select your moves:</div>
           <div className="space-y-3">
             {Array.from({ length: session.rounds }, (_, roundIndex) => (
-              <div key={roundIndex} className="bg-white/5 rounded-lg p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-white text-sm font-medium">
-                    R{roundIndex + 1}:
-                  </span>
-                  
-                  <div className="flex gap-2">
-                    {(['R', 'P', 'S']).map((move) => {
-                      const isSelected = selectedMoves[roundIndex] === move;
-                      
-                      return (
-                        <button
-                          key={move}
-                          onClick={() => selectMove(roundIndex, move)}
-                          disabled={isSubmitting}
-                          className={`w-10 h-10 rounded-lg border transition-all ${
-                            isSelected 
-                              ? "border-blue-500 bg-blue-500/20 text-white scale-110" 
-                              : "border-white/20 bg-white/5 text-gray-300 hover:border-white/40"
-                          } ${isSubmitting ? "opacity-50 cursor-not-allowed" : ""}`}
-                        >
-                          <span className="text-lg">{getMoveEmoji(move)}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  
-                  <span className="text-xs text-gray-400 min-w-[60px] text-right">
-                    {selectedMoves[roundIndex] ? getMoveEmoji(selectedMoves[roundIndex]) : "?"}
-                  </span>
+              <div key={roundIndex} className="flex items-center gap-3">
+                <div className="text-sm font-medium min-w-[70px]">
+                  Round {roundIndex + 1}:
                 </div>
+                
+                <div className="flex gap-2">
+                  {moves.map((move) => {
+                    const isSelected = selectedMoves[roundIndex] === move;
+                    return (
+                      <button
+                        key={move}
+                        onClick={() => handleMoveSelect(roundIndex, move)}
+                        disabled={isSubmitting}
+                        className={`w-10 h-10 rounded-lg border transition-all ${
+                          isSelected
+                            ? 'border-blue-500 bg-blue-500/20 scale-110'
+                            : 'border-white/20 bg-white/5 hover:bg-white/10'
+                        } ${isSubmitting ? "opacity-50 cursor-not-allowed" : ""}`}
+                      >
+                        <span className="text-lg">{getMoveEmoji(move)}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                
+                <span className="text-xs text-gray-400 min-w-[60px] text-right">
+                  {selectedMoves[roundIndex] ? getMoveEmoji(selectedMoves[roundIndex]) : "?"}
+                </span>
               </div>
             ))}
           </div>
@@ -602,64 +583,65 @@ function GameResultsModal({
             )}
           </div>
 
-          {/* Financial Summary */}
-          <div className="grid grid-cols-2 gap-4 text-center text-sm">
-            <div>
-              <div className="text-gray-400">Total Pot</div>
-              <div className="font-mono">{result.pot.toLocaleString()}</div>
+          {/* Round-by-round breakdown */}
+          <div className="space-y-2">
+            {result.myMoves.map((myMove, index) => {
+              const opponentMove = result.opponentMoves[index];
+              const roundResult = 
+                myMove === opponentMove ? 'draw' :
+                (myMove === 'R' && opponentMove === 'S') ||
+                (myMove === 'P' && opponentMove === 'R') ||
+                (myMove === 'S' && opponentMove === 'P') ? 'win' : 'lose';
+              
+              return (
+                <div key={index} className="flex items-center justify-between py-2 px-3 bg-white/5 rounded">
+                  <div className="text-sm">Round {index + 1}</div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">{getMoveEmoji(myMove)}</span>
+                    <span className="text-xs text-gray-400">vs</span>
+                    <span className="text-lg">{getMoveEmoji(opponentMove)}</span>
+                    <span className={`text-xs font-medium ml-2 ${
+                      roundResult === 'win' ? 'text-green-400' :
+                      roundResult === 'lose' ? 'text-red-400' : 'text-yellow-400'
+                    }`}>
+                      {roundResult.toUpperCase()}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Financial Summary */}
+        <div className="bg-white/5 rounded-lg p-4 mb-6">
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span>Total Pot:</span>
+              <span className="font-mono">{result.pot.toLocaleString()} RPS</span>
             </div>
-            <div>
-              <div className="text-gray-400">Your Stake</div>
-              <div className="font-mono">{result.stakeAmount.toLocaleString()}</div>
+            <div className="flex justify-between">
+              <span>Your Stake:</span>
+              <span className="font-mono text-red-400">-{result.stakeAmount.toLocaleString()} RPS</span>
+            </div>
+            {!result.isDraw && (
+              <div className="flex justify-between">
+                <span>Fees (5%):</span>
+                <span className="font-mono text-gray-400">
+                  -{Math.floor(result.pot * 0.05).toLocaleString()} RPS
+                </span>
+              </div>
+            )}
+            <hr className="border-white/20" />
+            <div className="flex justify-between font-bold">
+              <span>Net Change:</span>
+              <span className={`font-mono ${getResultColor()}`}>
+                {getTokenChangeDisplay()} RPS
+              </span>
             </div>
           </div>
         </div>
 
-        {/* Round by Round Results */}
-        {result.myMoves && result.opponentMoves && (
-          <div className="bg-white/5 rounded-lg p-4 mb-6">
-            <h3 className="font-semibold mb-3">Round Details</h3>
-            <div className="space-y-2">
-              {result.myMoves.map((myMove, index) => {
-                const opponentMove = result.opponentMoves[index];
-                let roundResult = '';
-                
-                if (myMove === opponentMove) {
-                  roundResult = 'Draw';
-                } else if (
-                  (myMove === 'R' && opponentMove === 'S') ||
-                  (myMove === 'P' && opponentMove === 'R') ||
-                  (myMove === 'S' && opponentMove === 'P')
-                ) {
-                  roundResult = 'You Won';
-                } else {
-                  roundResult = 'You Lost';
-                }
-                
-                return (
-                  <div key={index} className="flex items-center justify-between text-sm">
-                    <span className="font-medium">Round {index + 1}:</span>
-                    
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono">{getMoveEmoji(myMove)}</span>
-                      <span className="text-gray-400">vs</span>
-                      <span className="font-mono">{getMoveEmoji(opponentMove)}</span>
-                    </div>
-                    
-                    <span className={`font-medium ${
-                      roundResult === 'Draw' ? 'text-yellow-400' :
-                      roundResult === 'You Won' ? 'text-green-400' : 'text-red-400'
-                    }`}>
-                      {roundResult}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* Close Button */}
         <button
           onClick={onClose}
           className="w-full py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium transition-colors"

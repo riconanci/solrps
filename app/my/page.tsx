@@ -1,7 +1,8 @@
-// app/my/page.tsx
+// app/my/page.tsx - Grid layout with max rounds and navigation
 "use client";
 import { useEffect, useState } from "react";
-import { RevealModal } from "@/components/RevealModal";
+import { useWallet } from "../../src/state/wallet";
+import { RevealModal } from "../../src/components/RevealModal";
 
 type MatchData = {
   id: string;
@@ -37,8 +38,34 @@ type MatchData = {
   } | null;
 };
 
+type UserStats = {
+  gamesPlayed: number;
+  gamesWon: number;
+  gamesLost: number;
+  gamesDraw: number;
+  winPercentage: number;
+  totalEarned: number;
+  totalLost: number;
+  netAmount: number;
+  currentStreak: number;
+  longestWinStreak: number;
+};
+
 export default function MyMatchesPage() {
+  const wallet = useWallet();
   const [matches, setMatches] = useState<MatchData[]>([]);
+  const [stats, setStats] = useState<UserStats>({
+    gamesPlayed: 0,
+    gamesWon: 0,
+    gamesLost: 0,
+    gamesDraw: 0,
+    winPercentage: 0,
+    totalEarned: 0,
+    totalLost: 0,
+    netAmount: 0,
+    currentStreak: 0,
+    longestWinStreak: 0
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [revealModal, setRevealModal] = useState<{
@@ -47,28 +74,287 @@ export default function MyMatchesPage() {
   }>({ open: false, sessionId: null });
 
   useEffect(() => {
-    fetchMatches();
-  }, []);
+    if (!wallet.userId) {
+      wallet.connect('seed_alice', 500000, 'Alice');
+    } else {
+      fetchMatches();
+    }
+  }, [wallet.userId]);
 
-  async function fetchMatches() {
+  const fetchMatches = async () => {
     try {
       setLoading(true);
-      const res = await fetch("/api/me/matches");
+      const res = await fetch(`/api/me/matches?userId=${wallet.userId}`);
       if (!res.ok) throw new Error("Failed to fetch matches");
       const data = await res.json();
       setMatches(data.matches || []);
+      calculateStats(data.matches || []);
     } catch (err: any) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }
+  };
+
+  const calculateStats = (matchData: MatchData[]) => {
+    const resolvedMatches = matchData.filter(m => m.result);
+    const gamesPlayed = resolvedMatches.length;
+    const gamesWon = resolvedMatches.filter(m => m.result?.didIWin).length;
+    const gamesDraw = resolvedMatches.filter(m => m.result?.isDraw).length;
+    const gamesLost = gamesPlayed - gamesWon - gamesDraw;
+    
+    let totalEarned = 0;
+    let totalLost = 0;
+    let currentStreak = 0;
+    let longestWinStreak = 0;
+    let tempStreak = 0;
+    
+    resolvedMatches.forEach((match, index) => {
+      if (match.result?.didIWin) {
+        const winnings = match.result.pot - (match.result.feesTreasury + match.result.feesBurn) - match.totalStake;
+        totalEarned += winnings;
+        tempStreak++;
+        if (index === 0) currentStreak = tempStreak;
+      } else if (match.result?.isDraw) {
+        tempStreak = 0;
+        if (index === 0) currentStreak = 0;
+      } else {
+        totalLost += match.totalStake;
+        tempStreak = 0;
+        if (index === 0) currentStreak = 0;
+      }
+      
+      longestWinStreak = Math.max(longestWinStreak, tempStreak);
+    });
+
+    setStats({
+      gamesPlayed,
+      gamesWon,
+      gamesLost,
+      gamesDraw,
+      winPercentage: gamesPlayed > 0 ? Math.round((gamesWon / gamesPlayed) * 100) : 0,
+      totalEarned,
+      totalLost,
+      netAmount: totalEarned - totalLost,
+      currentStreak,
+      longestWinStreak
+    });
+  };
+
+  const getMoveEmoji = (move: string) => {
+    const emojis = { R: '🪨', P: '📄', S: '✂️' };
+    return emojis[move as keyof typeof emojis] || '?';
+  };
+
+  const getCardBackground = (match: MatchData) => {
+    if (!match.result) return 'bg-slate-800 border-slate-700';
+    
+    if (match.result.isDraw) {
+      return 'bg-yellow-900/20 border-yellow-500/30';
+    }
+    
+    return match.result.didIWin 
+      ? 'bg-green-900/20 border-green-500/30'
+      : 'bg-red-900/20 border-red-500/30';
+  };
+
+  const formatDateTime = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffTime = Math.abs(now.getTime() - date.getTime());
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+    if (diffDays === 1) {
+      return {
+        date: 'Today',
+        time: date.toLocaleTimeString('en-US', { 
+          hour: 'numeric', 
+          minute: '2-digit',
+          hour12: true 
+        })
+      };
+    } else if (diffDays === 2) {
+      return {
+        date: 'Yesterday',
+        time: date.toLocaleTimeString('en-US', { 
+          hour: 'numeric', 
+          minute: '2-digit',
+          hour12: true 
+        })
+      };
+    } else {
+      return {
+        date: date.toLocaleDateString('en-US', { 
+          month: 'short', 
+          day: 'numeric'
+        }),
+        time: date.toLocaleTimeString('en-US', { 
+          hour: 'numeric', 
+          minute: '2-digit',
+          hour12: true 
+        })
+      };
+    }
+  };
+
+  // Match card component with limited rounds display
+  const MatchCard = ({ match, isRecent }: { match: MatchData; isRecent: boolean }) => {
+    const [currentRoundStart, setCurrentRoundStart] = useState(0);
+    const maxVisibleRounds = 3; // Show max 3 rounds at a time
+    const totalRounds = match.myMoves.length;
+    const hasMoreRounds = totalRounds > maxVisibleRounds;
+    const visibleMoves = match.myMoves.slice(currentRoundStart, currentRoundStart + maxVisibleRounds);
+    const visibleOpponentMoves = match.opponentMoves.slice(currentRoundStart, currentRoundStart + maxVisibleRounds);
+
+    const canScrollLeft = currentRoundStart > 0;
+    const canScrollRight = currentRoundStart + maxVisibleRounds < totalRounds;
+
+    const scrollLeft = () => {
+      setCurrentRoundStart(Math.max(0, currentRoundStart - maxVisibleRounds));
+    };
+
+    const scrollRight = () => {
+      setCurrentRoundStart(Math.min(totalRounds - maxVisibleRounds, currentRoundStart + maxVisibleRounds));
+    };
+
+    const { date, time } = formatDateTime(match.createdAt);
+
+    return (
+      <div className={`border rounded-xl p-4 transition-all hover:scale-[1.02] relative ${getCardBackground(match)}`}>
+        {/* Recent badge */}
+        {isRecent && (
+          <div className="absolute -top-2 -right-2 bg-blue-500 text-white text-xs px-2 py-1 rounded-full font-medium">
+            NEW
+          </div>
+        )}
+
+        {/* Header */}
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <div className="font-semibold text-white">
+              vs {match.opponent?.displayName || "Unknown"}
+            </div>
+            <div className="text-xs text-gray-300">
+              {date} • {time}
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-xs text-gray-400">{match.rounds}R • {match.myRole}</div>
+          </div>
+        </div>
+
+        {/* Moves display with navigation */}
+        {match.result && (
+          <div className="bg-white/5 rounded-lg p-3 mb-3">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs text-gray-400">Moves</div>
+              {hasMoreRounds && (
+                <div className="flex gap-1">
+                  <button
+                    onClick={scrollLeft}
+                    disabled={!canScrollLeft}
+                    className={`w-6 h-6 rounded flex items-center justify-center text-xs ${
+                      canScrollLeft 
+                        ? 'bg-white/10 hover:bg-white/20 text-white' 
+                        : 'bg-white/5 text-gray-500 cursor-not-allowed'
+                    }`}
+                  >
+                    ←
+                  </button>
+                  <div className="text-xs text-gray-400 px-2 flex items-center">
+                    {Math.floor(currentRoundStart / maxVisibleRounds) + 1}/{Math.ceil(totalRounds / maxVisibleRounds)}
+                  </div>
+                  <button
+                    onClick={scrollRight}
+                    disabled={!canScrollRight}
+                    className={`w-6 h-6 rounded flex items-center justify-center text-xs ${
+                      canScrollRight 
+                        ? 'bg-white/10 hover:bg-white/20 text-white' 
+                        : 'bg-white/5 text-gray-500 cursor-not-allowed'
+                    }`}
+                  >
+                    →
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-1">
+              {/* Your moves */}
+              <div className="flex items-center gap-1">
+                <div className="text-xs text-blue-400 font-medium w-10">You:</div>
+                <div className="flex gap-1">
+                  {visibleMoves.map((move, index) => (
+                    <div key={currentRoundStart + index} className="w-8 h-8 flex items-center justify-center bg-blue-900/30 border border-blue-500/50 rounded text-lg">
+                      {getMoveEmoji(move)}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              
+              {/* Opponent moves */}
+              <div className="flex items-center gap-1">
+                <div className="text-xs text-red-400 font-medium w-10">Opp:</div>
+                <div className="flex gap-1">
+                  {visibleOpponentMoves.map((move, index) => (
+                    <div key={currentRoundStart + index} className="w-8 h-8 flex items-center justify-center bg-red-900/30 border border-red-500/50 rounded text-lg">
+                      {getMoveEmoji(move)}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Score */}
+            <div className="text-xs text-center mt-2 text-gray-300">
+              Score: {match.result.myWins}-{match.result.opponentWins}
+              {match.result.draws > 0 && ` (${match.result.draws} draws)`}
+            </div>
+          </div>
+        )}
+
+        {/* Result */}
+        <div className="text-center">
+          {match.result ? (
+            <>
+              <div className="font-mono text-lg font-bold">
+                {match.result.isDraw ? '±0' : match.result.didIWin ? 
+                  `+${(match.result.pot - (match.result.feesTreasury + match.result.feesBurn) - match.totalStake).toLocaleString()}` :
+                  `-${match.totalStake.toLocaleString()}`
+                } RPS
+              </div>
+              <div className="text-xs text-gray-400">
+                Pot: {match.result.pot.toLocaleString()} • 
+                {match.result.isDraw ? ' Draw' : match.result.didIWin ? ' Victory' : ' Defeat'}
+              </div>
+            </>
+          ) : (
+            <div className="text-yellow-400 font-medium">
+              {match.status === 'AWAITING_REVEAL' ? 'Awaiting Reveal' : match.status}
+            </div>
+          )}
+        </div>
+
+        {/* Action buttons */}
+        {match.status === "AWAITING_REVEAL" && match.isCreator && (
+          <div className="mt-3 pt-3 border-t border-white/20">
+            <button
+              onClick={() => setRevealModal({ open: true, sessionId: match.id })}
+              className="w-full py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm transition-colors"
+            >
+              🔓 Reveal Moves
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-lg">Loading your matches...</div>
+      <div className="max-w-6xl mx-auto p-6">
+        <div className="text-center py-12">
+          <div className="text-lg text-gray-400">Loading matches...</div>
         </div>
       </div>
     );
@@ -76,8 +362,8 @@ export default function MyMatchesPage() {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
-        <div className="text-center">
+      <div className="max-w-6xl mx-auto p-6">
+        <div className="text-center py-12">
           <div className="text-red-400 text-lg">Error: {error}</div>
           <button 
             onClick={fetchMatches}
@@ -91,233 +377,79 @@ export default function MyMatchesPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white p-8">
-      <div className="max-w-6xl mx-auto">
-        <h1 className="text-3xl font-bold mb-8">My Matches</h1>
+    <div className="max-w-7xl mx-auto p-6 space-y-6">
+      {/* Header */}
+      <div className="text-center">
+        <h1 className="text-3xl font-bold mb-2">My Matches</h1>
+        <p className="text-gray-400">Your Rock Paper Scissors battle history</p>
+      </div>
+
+      {/* Stats Section */}
+      <div className="bg-slate-800 rounded-xl p-6">
+        <h2 className="text-xl font-semibold mb-4">📊 Statistics</h2>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+          <div className="text-center">
+            <div className="text-2xl font-bold text-blue-400">{stats.gamesPlayed}</div>
+            <div className="text-xs text-gray-400">Games Played</div>
+          </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-green-400">{stats.gamesWon}</div>
+            <div className="text-xs text-gray-400">Games Won</div>
+          </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-yellow-400">{stats.gamesDraw}</div>
+            <div className="text-xs text-gray-400">Draws</div>
+          </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-purple-400">{stats.winPercentage}%</div>
+            <div className="text-xs text-gray-400">Win Rate</div>
+          </div>
+          <div className="text-center">
+            <div className={`text-2xl font-bold ${stats.netAmount >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              {stats.netAmount >= 0 ? '+' : ''}{stats.netAmount.toLocaleString()}
+            </div>
+            <div className="text-xs text-gray-400">Net RPS</div>
+          </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-orange-400">{stats.currentStreak}</div>
+            <div className="text-xs text-gray-400">Current Streak</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Matches Grid */}
+      <div className="space-y-4">
+        <h2 className="text-xl font-semibold">🎮 Recent Matches</h2>
         
         {matches.length === 0 ? (
-          <div className="text-center text-gray-400 py-12">
-            <div className="text-lg">No matches found</div>
-            <p className="mt-2">Play your first game to see matches here!</p>
+          <div className="text-center py-12 text-gray-400">
+            <div className="text-4xl mb-4">🎯</div>
+            <div className="text-lg mb-2">No matches found</div>
+            <p className="text-sm">Play your first game to see matches here!</p>
           </div>
         ) : (
-          <div className="space-y-6">
-            {matches.map(match => (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {matches.map((match, index) => (
               <MatchCard 
                 key={match.id} 
                 match={match} 
-                onReveal={(sessionId) => setRevealModal({ open: true, sessionId })}
+                isRecent={index === 0} 
               />
             ))}
           </div>
         )}
       </div>
 
+      {/* Reveal Modal */}
       <RevealModal
         open={revealModal.open}
         onClose={() => setRevealModal({ open: false, sessionId: null })}
         sessionId={revealModal.sessionId}
         onRevealed={() => {
           setRevealModal({ open: false, sessionId: null });
-          fetchMatches(); // Refresh matches after reveal
+          fetchMatches();
         }}
       />
-    </div>
-  );
-}
-
-function MatchCard({ 
-  match, 
-  onReveal 
-}: { 
-  match: MatchData; 
-  onReveal: (sessionId: string) => void;
-}) {
-  const getStatusBadge = (status: string) => {
-    const statusStyles = {
-      RESOLVED: "bg-green-600 text-white",
-      FORFEITED: "bg-red-600 text-white",
-      AWAITING_REVEAL: "bg-yellow-600 text-black",
-    };
-    return statusStyles[status as keyof typeof statusStyles] || "bg-gray-600 text-white";
-  };
-
-  const getResultText = () => {
-    if (!match.result) return null;
-    
-    if (match.result.isDraw) {
-      return (
-        <div className="flex flex-col items-center justify-center bg-yellow-900/20 border border-yellow-500/30 rounded-lg px-4 py-3">
-          <span className="text-2xl font-bold text-yellow-400">DRAW</span>
-        </div>
-      );
-    }
-    
-    return match.result.didIWin ? (
-      <div className="flex flex-col items-center justify-center bg-green-900/20 border border-green-500/30 rounded-lg px-4 py-3">
-        <span className="text-2xl font-bold text-green-400">WIN</span>
-      </div>
-    ) : (
-      <div className="flex flex-col items-center justify-center bg-red-900/20 border border-red-500/30 rounded-lg px-4 py-3">
-        <span className="text-2xl font-bold text-red-400">LOST</span>
-      </div>
-    );
-  };
-
-  const getWinningsText = () => {
-    if (!match.result) return null;
-    
-    if (match.result.isDraw) {
-      return (
-        <div className="text-center">
-          <span className="text-gray-400">Refunded</span>
-          <span className="text-gray-400 ml-1">Pot</span>
-        </div>
-      );
-    }
-    
-    if (match.result.didIWin) {
-      const netWinnings = match.result.payoutWinner - match.totalStake;
-      return (
-        <div className="text-center">
-          <span className="text-green-400 font-mono font-bold text-lg">
-            +{netWinnings.toLocaleString()}
-          </span>
-          <span className="text-gray-400 ml-1">Pot</span>
-        </div>
-      );
-    } else {
-      return (
-        <div className="text-center">
-          <span className="text-red-400 font-mono font-bold text-lg">
-            -{match.totalStake.toLocaleString()}
-          </span>
-          <span className="text-gray-400 ml-1">Pot</span>
-        </div>
-      );
-    }
-  };
-
-  const formatMoves = (moves: string[]) => {
-    const moveEmojis = { R: "🪨", P: "📄", S: "✂️" };
-    return moves.map(move => moveEmojis[move as keyof typeof moveEmojis] || move).join(" ");
-  };
-
-  return (
-    <div className="border border-white/20 rounded-xl p-6 bg-white/5 hover:bg-white/10 transition-colors">
-      
-      {/* Header Section */}
-      <div className="flex items-start justify-between mb-4">
-        <div className="flex-1">
-          <div className="flex items-center gap-3 mb-2">
-            <h3 className="text-xl font-semibold">
-              vs {match.opponent?.displayName || "Unknown"}
-            </h3>
-            <span className={`px-2 py-1 rounded text-xs font-medium ${getStatusBadge(match.status)}`}>
-              {match.status.replace("_", " ")}
-            </span>
-          </div>
-          
-          <div className="text-sm text-gray-400">
-            {new Date(match.createdAt).toLocaleDateString()} • 
-            {match.rounds} rounds • {match.stakePerRound} tokens/round • 
-            Role: {match.myRole}
-          </div>
-        </div>
-        
-        {/* Result and Winnings Section */}
-        <div className="flex items-center gap-6">
-          {/* Large Result Text */}
-          {getResultText()}
-          
-          {/* Winnings */}
-          <div className="text-right">
-            {getWinningsText()}
-            <div className="text-sm text-gray-400 mt-1">
-              Total Pot: {match.result?.pot.toLocaleString() || (match.totalStake * 2).toLocaleString()}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Game Details */}
-      {match.result && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-white/10">
-          <div>
-            <h4 className="font-semibold mb-2">Round Results</h4>
-            <div className="text-sm space-y-1">
-              <div className="flex justify-between">
-                <span>Your wins:</span>
-                <span className="text-green-400 font-semibold">{match.result.myWins}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Opponent wins:</span>
-                <span className="text-red-400 font-semibold">{match.result.opponentWins}</span>
-              </div>
-              {match.result.draws > 0 && (
-                <div className="flex justify-between">
-                  <span>Draws:</span>
-                  <span className="text-yellow-400 font-semibold">{match.result.draws}</span>
-                </div>
-              )}
-            </div>
-          </div>
-          
-          <div>
-            <h4 className="font-semibold mb-2">Moves</h4>
-            <div className="text-sm space-y-1">
-              <div className="flex justify-between">
-                <span>You:</span>
-                <span className="text-lg">{formatMoves(match.myMoves)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Opponent:</span>
-                <span className="text-lg">{formatMoves(match.opponentMoves)}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Round by round details */}
-      {match.result?.roundsOutcome && match.result.roundsOutcome.length > 0 && (
-        <div className="mt-4 pt-4 border-t border-white/10">
-          <h4 className="font-semibold mb-2">Round by Round</h4>
-          <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-            {match.result.roundsOutcome.map((round: any, index: number) => (
-              <div key={index} className="text-center p-2 bg-white/5 rounded text-xs">
-                <div className="font-medium">Round {round.round || index + 1}</div>
-                <div className="flex justify-center gap-1 my-1">
-                  <span>{formatMoves([match.isCreator ? round.a : round.b])}</span>
-                  <span>vs</span>
-                  <span>{formatMoves([match.isCreator ? round.b : round.a])}</span>
-                </div>
-                <div className={`font-semibold ${
-                  round.winner === "DRAW" ? "text-yellow-400" :
-                  (match.isCreator && round.winner === "A") || (!match.isCreator && round.winner === "B") 
-                    ? "text-green-400" : "text-red-400"
-                }`}>
-                  {round.winner === "DRAW" ? "Draw" : 
-                   (match.isCreator && round.winner === "A") || (!match.isCreator && round.winner === "B")
-                     ? "Win" : "Loss"}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Action buttons */}
-      {match.status === "AWAITING_REVEAL" && match.isCreator && (
-        <div className="mt-4 pt-4 border-t border-white/10">
-          <button
-            onClick={() => onReveal(match.id)}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium transition-colors"
-          >
-            🔓 Reveal Moves
-          </button>
-        </div>
-      )}
     </div>
   );
 }
