@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 import { joinSessionSchema } from "@/lib/zod";
 import { prisma } from "@/lib/db";
-import { getUserOrSeed } from "../../_utils";
+import { getUserFromHeaders } from "../../_utils";
 import { calcPot, payoutFromPot } from "@/lib/payout";
 import { tallyOutcome } from "@/lib/rps";
 import type { Move } from "@/lib/hash";
@@ -17,7 +17,7 @@ export async function POST(req: Request) {
     }
 
     const { sessionId, challengerMoves } = parsed.data;
-    const user = await getUserOrSeed();
+    const user = await getUserFromHeaders(req); // Pass request object
 
     const result = await prisma.$transaction(async (tx: any) => {
       // Get session and validate
