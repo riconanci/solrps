@@ -1,9 +1,8 @@
-// src/components/Navigation.tsx
+// src/components/Navigation.tsx - Clean working version
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useWallet } from "../state/wallet";
-import { APP_CONFIG } from "../config/constants";
 
 export function Navigation() {
   const pathname = usePathname();
@@ -26,13 +25,11 @@ export function Navigation() {
             <span className="text-xl font-bold text-white">SolRPS</span>
             <div className="flex gap-1">
               <span className="text-xs bg-yellow-600 text-black px-2 py-1 rounded">
-                {APP_CONFIG.USE_BLOCKCHAIN ? 'DEVNET' : 'MOCK'}
+                MOCK
               </span>
-              {APP_CONFIG.ENABLE_PHASE2 && (
-                <span className="text-xs bg-purple-600 text-white px-2 py-1 rounded">
-                  PHASE 2
-                </span>
-              )}
+              <span className="text-xs bg-purple-600 text-white px-2 py-1 rounded">
+                PHASE 2
+              </span>
             </div>
           </Link>
 

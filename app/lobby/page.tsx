@@ -1,268 +1,671 @@
-// app/lobby/page.tsx
+// app/lobby/page.tsx - Complete rewrite independent of play page games
 "use client";
-import { useEffect, useState } from "react";
-import { JoinSessionModal } from "@/components/JoinSessionModal";
+import { useState, useEffect } from "react";
+import { useWallet } from "../../src/state/wallet";
 
-type SessionCard = {
+interface SessionData {
   id: string;
   creator: string;
   rounds: number;
   stakePerRound: number;
   totalStake: number;
-  age: string;
-};
+  age?: string;
+  status: string;
+}
+
+interface GameResult {
+  didWin: boolean;
+  isDraw: boolean;
+  didLose: boolean;
+  myMoves: string[];
+  opponentMoves: string[];
+  myWins: number;
+  opponentWins: number;
+  draws: number;
+  stakeAmount: number;
+  balanceChange: number;
+  newBalance: number;
+  pot: number;
+  opponent: string;
+  rounds: number;
+}
 
 export default function LobbyPage() {
-  const [sessions, setSessions] = useState<SessionCard[]>([]);
+  const wallet = useWallet();
+  const [publicSessions, setPublicSessions] = useState<SessionData[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showManualJoin, setShowManualJoin] = useState(false);
-  const [sessionIdInput, setSessionIdInput] = useState("");
-  
-  // Join Modal State
-  const [joinModal, setJoinModal] = useState<{
-    open: boolean;
-    session: SessionCard | null;
-  }>({ open: false, session: null });
+  const [manualJoinId, setManualJoinId] = useState('');
+  const [selectedSession, setSelectedSession] = useState<SessionData | null>(null);
+  const [gameResult, setGameResult] = useState<GameResult | null>(null);
+  const [lastRefresh, setLastRefresh] = useState(Date.now());
+
+  // Auto-connect wallet
+  useEffect(() => {
+    if (!wallet.userId) {
+      wallet.connect('seed_alice', 500000, 'Alice');
+    }
+  }, [wallet]);
 
   useEffect(() => {
-    fetchSessions();
+    loadPublicSessions();
+    // Refresh every 5 seconds to show new games
+    const interval = setInterval(() => {
+      loadPublicSessions();
+      setLastRefresh(Date.now());
+    }, 5000);
+    return () => clearInterval(interval);
   }, []);
 
-  async function fetchSessions() {
+  const loadPublicSessions = async () => {
+    setLoading(true);
     try {
-      setLoading(true);
-      const res = await fetch("/api/lobby");
-      if (res.ok) {
-        const data = await res.json();
-        setSessions(data.items || []);
+      const response = await fetch('/api/lobby');
+      if (response.ok) {
+        const data = await response.json();
+        console.log('Public lobby data:', data);
+        
+        // Handle API response format
+        const sessionList = data.items || data || [];
+        
+        if (Array.isArray(sessionList)) {
+          // Show ALL open sessions from the API, don't filter by user
+          const availableSessions = sessionList.filter(session => 
+            session.status === 'OPEN' || !session.status
+          );
+          setPublicSessions(availableSessions);
+        } else {
+          console.warn('API returned non-array data:', data);
+          setPublicSessions([]);
+        }
+      } else {
+        console.error('Failed to fetch public sessions:', response.status);
+        setPublicSessions([]);
       }
     } catch (error) {
-      console.error("Failed to fetch sessions:", error);
+      console.error('Failed to load public sessions:', error);
+      setPublicSessions([]);
     } finally {
       setLoading(false);
     }
-  }
+  };
 
-  async function handleManualJoin() {
-    if (!sessionIdInput.trim()) {
-      alert("Please enter a session ID");
+  const handleManualJoin = async () => {
+    if (!manualJoinId.trim()) return;
+    
+    try {
+      // Try to fetch session details first
+      const sessionResponse = await fetch(`/api/session/${manualJoinId.trim()}`);
+      if (sessionResponse.ok) {
+        const sessionData = await sessionResponse.json();
+        
+        // Check if session is available
+        if (sessionData.status !== 'OPEN') {
+          alert('This game is no longer available to join.');
+          setManualJoinId('');
+          return;
+        }
+        
+        // Check if trying to join own game
+        if (sessionData.creatorId === wallet.userId) {
+          alert("You can't join your own game!");
+          setManualJoinId('');
+          return;
+        }
+        
+        setSelectedSession({
+          id: sessionData.id,
+          creator: sessionData.creator?.displayName || sessionData.creatorId?.slice(0, 6) || 'Unknown',
+          rounds: sessionData.rounds,
+          stakePerRound: sessionData.stakePerRound,
+          totalStake: sessionData.totalStake,
+          status: sessionData.status,
+        });
+      } else {
+        alert('Session not found or invalid session ID.');
+      }
+      setManualJoinId('');
+    } catch (error) {
+      console.error('Error with manual join:', error);
+      alert('Invalid session ID or session not found');
+      setManualJoinId('');
+    }
+  };
+
+  const handleJoinPublicGame = (session: SessionData) => {
+    // Check if trying to join own game
+    if (session.creator === wallet.userId || session.creator.includes(wallet.userId?.slice(0, 6) || '')) {
+      alert("You can't join your own game!");
       return;
     }
-
-    try {
-      // Fetch session details by ID
-      const res = await fetch(`/api/session/${sessionIdInput.trim()}`);
-      if (!res.ok) {
-        throw new Error("Session not found or invalid");
-      }
-      
-      const sessionData = await res.json();
-      
-      // Convert to expected format and open join modal
-      const session: SessionCard = {
-        id: sessionData.id,
-        creator: sessionData.creator?.displayName || "Unknown",
-        rounds: sessionData.rounds,
-        stakePerRound: sessionData.stakePerRound,
-        totalStake: sessionData.totalStake,
-        age: "Private invite"
-      };
-
-      setJoinModal({ open: true, session });
-      setShowManualJoin(false);
-      setSessionIdInput("");
-      
-    } catch (error: any) {
-      alert(error.message || "Failed to find session");
+    
+    // Double-check session is still available
+    if (session.status !== 'OPEN') {
+      alert('This game is no longer available to join.');
+      loadPublicSessions(); // Refresh the list
+      return;
     }
+    
+    setSelectedSession(session);
+  };
+
+  const refreshSessions = () => {
+    loadPublicSessions();
+    setLastRefresh(Date.now());
+  };
+
+  if (!wallet.userId) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] gap-6">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold mb-2">Loading...</h2>
+          <p className="text-gray-400">Connecting to wallet...</p>
+        </div>
+      </div>
+    );
   }
 
-  function openJoinModal(session: SessionCard) {
-    setJoinModal({ open: true, session });
-  }
-
-  function closeJoinModal() {
-    setJoinModal({ open: false, session: null });
-  }
-
-  function onSessionJoined() {
-    closeJoinModal();
-    fetchSessions(); // Refresh to remove joined session
-  }
+  const timeAgo = Math.floor((Date.now() - lastRefresh) / 1000);
 
   return (
-    <>
-      <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold mb-2">🕹️ Game Lobby</h1>
-          <p className="text-neutral-400">Join available game sessions and challenge other players</p>
-        </div>
+    <div className="max-w-6xl mx-auto p-6 space-y-6">
+      <div className="text-center">
+        <h1 className="text-3xl font-bold mb-2">Game Lobby</h1>
+        <p className="text-gray-400">Join available games or enter a session ID</p>
+      </div>
 
-        {/* Manual Join Input */}
-        {showManualJoin && (
-          <div className="mb-6 p-4 bg-white/5 border border-white/20 rounded-xl">
-            <h3 className="text-lg font-semibold mb-3">Join Game by Session ID</h3>
-            <div className="flex gap-3">
-              <input
-                type="text"
-                value={sessionIdInput}
-                onChange={(e) => setSessionIdInput(e.target.value)}
-                placeholder="Enter session ID (e.g., clm1a2b3c4d5...)"
-                className="flex-1 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
-              />
-              <button
-                onClick={handleManualJoin}
-                className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg font-medium transition-colors"
-              >
-                Join Game
-              </button>
-              <button
-                onClick={() => {
-                  setShowManualJoin(false);
-                  setSessionIdInput("");
-                }}
-                className="px-4 py-2 bg-gray-600 hover:bg-gray-700 rounded-lg font-medium transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-            <p className="text-sm text-gray-400 mt-2">
-              💡 Get a session ID from someone who created a game, or copy it from your created sessions.
+      {/* Phase 2 Mode Indicator */}
+      <div className="bg-slate-800 border border-white/10 rounded-lg p-4 mb-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold">🔧 Mock Mode</h3>
+            <p className="text-gray-400 text-sm">
+              Games use mock escrow. Instant resolution for testing.
             </p>
-          </div>
-        )}
-
-        {/* Sessions Grid */}
-        <div className="space-y-4">
-          {loading ? (
-            <div className="text-center py-12">
-              <div className="text-lg text-neutral-400">Loading available sessions...</div>
-            </div>
-          ) : sessions.length === 0 ? (
-            <div className="text-center py-12">
-              <div className="text-lg text-neutral-400 mb-2">No sessions available</div>
-              <p className="text-sm text-neutral-500">
-                Be the first to{" "}
-                <a href="/play" className="text-blue-400 hover:text-blue-300">
-                  create a session
-                </a>{" "}
-                for others to join!
-              </p>
-            </div>
-          ) : (
-            <>
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xl font-semibold">Available Sessions ({sessions.length})</h2>
-                <div className="flex items-center gap-3">
-                  {/* Manual Join Button */}
-                  <button
-                    onClick={() => setShowManualJoin(!showManualJoin)}
-                    className="text-sm px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors font-medium flex items-center gap-2"
-                  >
-                    🔑 Manual Join
-                  </button>
-                  
-                  {/* Refresh Button */}
-                  <button 
-                    onClick={fetchSessions}
-                    className="text-sm px-3 py-1 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
-                  >
-                    🔄 Refresh
-                  </button>
-                </div>
-              </div>
-              
-              <div className="grid gap-4">
-                {sessions.map((session) => (
-                  <SessionCard 
-                    key={session.id} 
-                    session={session} 
-                    onJoin={() => openJoinModal(session)}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* Info Section */}
-        <div className="mt-12 p-6 bg-white/5 rounded-xl">
-          <h3 className="text-lg font-semibold mb-3">How to Play</h3>
-          <div className="grid md:grid-cols-2 gap-4 text-sm text-neutral-300">
-            <div>
-              <div className="font-medium text-white mb-1">1. Choose a Session</div>
-              <div>Pick a game that matches your preferred stakes and rounds.</div>
-            </div>
-            <div>
-              <div className="font-medium text-white mb-1">2. Submit Your Moves</div>
-              <div>Enter your Rock, Paper, Scissors moves for each round.</div>
-            </div>
-            <div>
-              <div className="font-medium text-white mb-1">3. Instant Results</div>
-              <div>Game resolves immediately with win/lose/draw outcome.</div>
-            </div>
-            <div>
-              <div className="font-medium text-white mb-1">4. Collect Winnings</div>
-              <div>Winner takes ~90% of the pot, loser pays stake, draws refund.</div>
-            </div>
           </div>
           
-          <div className="mt-4 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-            <p className="text-xs text-blue-300">
-              💡 <strong>Tip:</strong> Use "Manual Join" to join private games by session ID, or browse public sessions below!
-            </p>
+          <div className="flex gap-2">
+            <span className="text-xs px-2 py-1 rounded bg-yellow-600 text-black">
+              MOCK
+            </span>
+            <span className="text-xs bg-purple-600 text-white px-2 py-1 rounded">
+              PHASE 2
+            </span>
           </div>
         </div>
       </div>
 
-      {/* Join Session Modal */}
-      <JoinSessionModal
-        open={joinModal.open}
-        onClose={closeJoinModal}
-        session={joinModal.session}
-        onJoined={onSessionJoined}
-      />
-    </>
+      {/* Public Games Section */}
+      <div className="bg-slate-800 rounded-xl p-6">
+        <div className="flex justify-between items-center mb-6">
+          <div>
+            <h2 className="text-xl font-semibold">Public Games</h2>
+            <p className="text-xs text-gray-500">
+              Last updated: {timeAgo < 60 ? `${timeAgo}s ago` : `${Math.floor(timeAgo / 60)}m ago`}
+            </p>
+          </div>
+          
+          {/* Manual Join Controls */}
+          <div className="flex items-center gap-3">
+            <input
+              type="text"
+              placeholder="Session ID..."
+              value={manualJoinId}
+              onChange={(e) => setManualJoinId(e.target.value)}
+              className="w-36 px-3 py-2 text-sm bg-white/5 border border-white/20 rounded-lg focus:border-blue-500 focus:outline-none"
+              onKeyPress={(e) => e.key === 'Enter' && handleManualJoin()}
+            />
+            <button
+              onClick={handleManualJoin}
+              disabled={!manualJoinId.trim()}
+              className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-medium transition-colors"
+            >
+              Join ID
+            </button>
+            <button
+              onClick={refreshSessions}
+              className="px-4 py-2 text-sm bg-gray-600 hover:bg-gray-700 rounded-lg transition-colors"
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        {/* Games Grid */}
+        {loading ? (
+          <div className="text-center py-12 text-gray-400">
+            <div className="animate-spin text-2xl mb-2">⚡</div>
+            <div>Loading available games...</div>
+          </div>
+        ) : !Array.isArray(publicSessions) || publicSessions.length === 0 ? (
+          <div className="text-center py-12 text-gray-400">
+            <div className="text-4xl mb-4">🎮</div>
+            <div className="mb-2">No public games available right now.</div>
+            <div className="text-sm">Create one on the Play page!</div>
+          </div>
+        ) : (
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {publicSessions.map((session) => (
+              <div key={session.id} className="bg-white/5 rounded-lg p-4 hover:bg-white/10 transition-colors border border-white/10">
+                <div className="flex justify-between items-start mb-3">
+                  <div>
+                    <div className="font-medium text-white">
+                      {session.rounds} Round{session.rounds > 1 ? 's' : ''}
+                    </div>
+                    <div className="text-sm text-gray-400">
+                      {session.stakePerRound.toLocaleString()} RPS per round
+                    </div>
+                  </div>
+                  <span className="text-xs bg-green-600 text-white px-2 py-1 rounded font-medium">
+                    OPEN
+                  </span>
+                </div>
+
+                <div className="text-xs text-gray-500 mb-3 space-y-1">
+                  <div>Creator: {session.creator}</div>
+                  {session.age && <div>Created: {session.age}</div>}
+                  <div className="font-mono text-gray-600">
+                    ID: {session.id.slice(0, 6)}...
+                  </div>
+                </div>
+
+                <div className="text-sm space-y-1 mb-4 bg-white/5 rounded p-2">
+                  <div className="flex justify-between">
+                    <span>Total Pot:</span>
+                    <span className="font-mono font-bold">{(session.totalStake * 2).toLocaleString()} RPS</span>
+                  </div>
+                  <div className="flex justify-between text-green-400">
+                    <span>Winner Gets:</span>
+                    <span className="font-mono font-bold">
+                      {Math.floor(session.totalStake * 2 * 0.95).toLocaleString()} RPS
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-gray-500 text-xs">
+                    <span>Your Risk:</span>
+                    <span className="font-mono">
+                      {session.totalStake.toLocaleString()} RPS
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => handleJoinPublicGame(session)}
+                  className="w-full py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm font-medium transition-colors"
+                >
+                  Join Game
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Join Modal */}
+      {selectedSession && !gameResult && (
+        <JoinGameModal
+          session={selectedSession}
+          onClose={() => setSelectedSession(null)}
+          onGameComplete={(result) => {
+            setGameResult(result);
+            setSelectedSession(null);
+            // Don't refresh here - let the interval handle it
+          }}
+        />
+      )}
+
+      {/* Game Results Modal */}
+      {gameResult && (
+        <GameResultsModal
+          result={gameResult}
+          onClose={() => {
+            setGameResult(null);
+            // Refresh after viewing results
+            setTimeout(refreshSessions, 1000);
+          }}
+        />
+      )}
+    </div>
   );
 }
 
-function SessionCard({ 
+// Join Game Modal Component - Same as before but with better error handling
+function JoinGameModal({ 
   session, 
-  onJoin 
+  onClose, 
+  onGameComplete 
 }: { 
-  session: SessionCard; 
-  onJoin: () => void;
+  session: SessionData; 
+  onClose: () => void; 
+  onGameComplete: (result: GameResult) => void;
 }) {
+  const wallet = useWallet();
+  const [selectedMoves, setSelectedMoves] = useState<string[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string>('');
+
+  const getMoveEmoji = (move: string) => {
+    const emojis = { R: '🪨', P: '📄', S: '✂️' };
+    return emojis[move as keyof typeof emojis] || '?';
+  };
+
+  const selectMove = (roundIndex: number, move: string) => {
+    const newMoves = [...selectedMoves];
+    newMoves[roundIndex] = move;
+    setSelectedMoves(newMoves);
+    setError(''); // Clear error when user makes changes
+  };
+
+  const canJoin = selectedMoves.filter(Boolean).length === session.rounds && 
+                 (wallet.balance || 0) >= session.totalStake;
+
+  const handleJoinGame = async () => {
+    if (!canJoin) return;
+
+    setIsSubmitting(true);
+    setError('');
+    
+    try {
+      const response = await fetch('/api/session/join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: session.id,
+          challengerMoves: selectedMoves,
+          userId: wallet.userId,
+        }),
+      });
+
+      const responseText = await response.text();
+      console.log('Join response:', response.status, responseText);
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to join game';
+        try {
+          const errorData = JSON.parse(responseText);
+          errorMessage = errorData.error || errorMessage;
+        } catch (e) {
+          errorMessage = responseText || errorMessage;
+        }
+        throw new Error(errorMessage);
+      }
+
+      const result = JSON.parse(responseText);
+      console.log('Join result:', result);
+
+      // Handle instant resolution (Phase 1 behavior)
+      if (result.gameResolved && result.result) {
+        onGameComplete(result.result);
+      } else {
+        // Game joined but not resolved yet
+        alert('Game joined successfully! Waiting for resolution...');
+        onClose();
+      }
+      
+    } catch (error: any) {
+      console.error('Failed to join game:', error);
+      setError(error.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
-    <div className="border border-white/20 rounded-xl p-4 bg-white/5 hover:bg-white/10 transition-colors">
-      <div className="flex items-center justify-between">
-        <div className="flex-1">
-          <div className="flex items-center gap-3 mb-2">
-            <h3 className="text-lg font-semibold">vs {session.creator}</h3>
-            <span className="px-2 py-1 bg-green-600 text-white rounded text-xs font-medium">
-              OPEN
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-slate-800 rounded-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
+        {/* Header */}
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-xl font-bold">Join Game</h2>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-white text-2xl"
+          >
+            ×
+          </button>
+        </div>
+
+        {/* Error Display */}
+        {error && (
+          <div className="mb-4 p-3 bg-red-900/20 border border-red-500/30 rounded-lg">
+            <p className="text-red-400 text-sm">{error}</p>
+          </div>
+        )}
+
+        {/* Game Info */}
+        <div className="bg-white/5 rounded-lg p-4 mb-6">
+          <div className="text-sm space-y-2">
+            <div className="flex justify-between">
+              <span>Creator:</span>
+              <span className="font-medium">{session.creator}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Rounds:</span>
+              <span className="font-medium">{session.rounds}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Your Stake:</span>
+              <span className="font-mono">{session.totalStake.toLocaleString()} RPS</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Total Pot:</span>
+              <span className="font-mono">{(session.totalStake * 2).toLocaleString()} RPS</span>
+            </div>
+            <div className="flex justify-between text-green-400">
+              <span>Winner Gets:</span>
+              <span className="font-mono">
+                {Math.floor(session.totalStake * 2 * 0.95).toLocaleString()} RPS
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Move Selection */}
+        <div className="mb-6">
+          <div className="flex justify-between items-center mb-3">
+            <span className="text-sm font-medium">Select Your Moves</span>
+            <span className="text-sm text-gray-400">
+              {selectedMoves.filter(Boolean).length}/{session.rounds}
             </span>
           </div>
           
-          <div className="text-sm text-gray-400 space-y-1">
-            <div>{session.rounds} rounds • {session.stakePerRound} tokens/round</div>
-            <div>Total stake: {session.totalStake} tokens each</div>
-            <div>Created: {session.age}</div>
+          <div className="space-y-3">
+            {Array.from({ length: session.rounds }, (_, roundIndex) => (
+              <div key={roundIndex} className="bg-white/5 rounded-lg p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-white text-sm font-medium">
+                    R{roundIndex + 1}:
+                  </span>
+                  
+                  <div className="flex gap-2">
+                    {(['R', 'P', 'S']).map((move) => {
+                      const isSelected = selectedMoves[roundIndex] === move;
+                      
+                      return (
+                        <button
+                          key={move}
+                          onClick={() => selectMove(roundIndex, move)}
+                          disabled={isSubmitting}
+                          className={`w-10 h-10 rounded-lg border transition-all ${
+                            isSelected 
+                              ? "border-blue-500 bg-blue-500/20 text-white scale-110" 
+                              : "border-white/20 bg-white/5 text-gray-300 hover:border-white/40"
+                          } ${isSubmitting ? "opacity-50 cursor-not-allowed" : ""}`}
+                        >
+                          <span className="text-lg">{getMoveEmoji(move)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  
+                  <span className="text-xs text-gray-400 min-w-[60px] text-right">
+                    {selectedMoves[roundIndex] ? getMoveEmoji(selectedMoves[roundIndex]) : "?"}
+                  </span>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
-        
-        <div className="text-right">
-          <div className="text-lg font-mono text-green-400 font-bold mb-2">
-            {session.totalStake * 2} pot
+
+        {/* Balance Check */}
+        <div className="bg-white/5 rounded-lg p-3 mb-6">
+          <div className="flex justify-between text-sm">
+            <span>Your Balance:</span>
+            <span className={`font-mono ${(wallet.balance || 0) >= session.totalStake ? 'text-green-400' : 'text-red-400'}`}>
+              {(wallet.balance || 0).toLocaleString()} RPS
+            </span>
           </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex gap-3">
           <button
-            onClick={onJoin}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium transition-colors"
+            onClick={onClose}
+            disabled={isSubmitting}
+            className="flex-1 py-3 bg-gray-600 hover:bg-gray-700 disabled:opacity-50 rounded-lg font-medium transition-colors"
           >
-            🎯 Join Game
+            Cancel
+          </button>
+          
+          <button
+            onClick={handleJoinGame}
+            disabled={!canJoin || isSubmitting}
+            className={`flex-1 py-3 rounded-lg font-medium transition-colors ${
+              canJoin && !isSubmitting
+                ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                : 'bg-gray-600 text-gray-400 cursor-not-allowed'
+            }`}
+          >
+            {isSubmitting ? 'Joining...' : 'Join Game'}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Game Results Modal - Same as before
+function GameResultsModal({ 
+  result, 
+  onClose 
+}: { 
+  result: GameResult; 
+  onClose: () => void;
+}) {
+  const getMoveEmoji = (move: string) => {
+    const emojis = { R: '🪨', P: '📄', S: '✂️' };
+    return emojis[move as keyof typeof emojis] || '?';
+  };
+
+  const getResultColor = () => {
+    if (result.isDraw) return 'text-yellow-400';
+    return result.didWin ? 'text-green-400' : 'text-red-400';
+  };
+
+  const getResultText = () => {
+    if (result.isDraw) return 'DRAW';
+    return result.didWin ? 'YOU WIN!' : 'YOU LOSE';
+  };
+
+  const getTokenChangeDisplay = () => {
+    if (result.isDraw) return '+0';
+    const change = result.balanceChange;
+    return change >= 0 ? `+${change.toLocaleString()}` : change.toLocaleString();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-slate-800 rounded-xl max-w-lg w-full p-6">
+        {/* Result Header */}
+        <div className="text-center mb-6">
+          <div className={`text-4xl font-bold mb-2 ${getResultColor()}`}>
+            {getResultText()}
+          </div>
+          <div className={`text-2xl font-mono ${getResultColor()}`}>
+            {getTokenChangeDisplay()} RPS
+          </div>
+          <div className="text-sm text-gray-400 mt-1">
+            New Balance: {result.newBalance.toLocaleString()} RPS
+          </div>
+        </div>
+
+        {/* Score Summary */}
+        <div className="bg-white/5 rounded-lg p-4 mb-6">
+          <div className="text-center mb-4">
+            <div className="text-xl font-bold">
+              {result.myWins} - {result.opponentWins}
+            </div>
+            <div className="text-sm text-gray-400">
+              You vs {result.opponent}
+            </div>
+            {result.draws > 0 && (
+              <div className="text-xs text-gray-500">
+                {result.draws} draw{result.draws > 1 ? 's' : ''}
+              </div>
+            )}
+          </div>
+
+          {/* Financial Summary */}
+          <div className="grid grid-cols-2 gap-4 text-center text-sm">
+            <div>
+              <div className="text-gray-400">Total Pot</div>
+              <div className="font-mono">{result.pot.toLocaleString()}</div>
+            </div>
+            <div>
+              <div className="text-gray-400">Your Stake</div>
+              <div className="font-mono">{result.stakeAmount.toLocaleString()}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Round by Round Results */}
+        {result.myMoves && result.opponentMoves && (
+          <div className="bg-white/5 rounded-lg p-4 mb-6">
+            <h3 className="font-semibold mb-3">Round Details</h3>
+            <div className="space-y-2">
+              {result.myMoves.map((myMove, index) => {
+                const opponentMove = result.opponentMoves[index];
+                let roundResult = '';
+                
+                if (myMove === opponentMove) {
+                  roundResult = 'Draw';
+                } else if (
+                  (myMove === 'R' && opponentMove === 'S') ||
+                  (myMove === 'P' && opponentMove === 'R') ||
+                  (myMove === 'S' && opponentMove === 'P')
+                ) {
+                  roundResult = 'You Won';
+                } else {
+                  roundResult = 'You Lost';
+                }
+                
+                return (
+                  <div key={index} className="flex items-center justify-between text-sm">
+                    <span className="font-medium">Round {index + 1}:</span>
+                    
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono">{getMoveEmoji(myMove)}</span>
+                      <span className="text-gray-400">vs</span>
+                      <span className="font-mono">{getMoveEmoji(opponentMove)}</span>
+                    </div>
+                    
+                    <span className={`font-medium ${
+                      roundResult === 'Draw' ? 'text-yellow-400' :
+                      roundResult === 'You Won' ? 'text-green-400' : 'text-red-400'
+                    }`}>
+                      {roundResult}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Close Button */}
+        <button
+          onClick={onClose}
+          className="w-full py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium transition-colors"
+        >
+          Continue
+        </button>
       </div>
     </div>
   );
