@@ -146,12 +146,56 @@ function MatchCard({
     if (!match.result) return null;
     
     if (match.result.isDraw) {
-      return <span className="text-yellow-400 font-semibold">DRAW</span>;
+      return (
+        <div className="flex flex-col items-center justify-center bg-yellow-900/20 border border-yellow-500/30 rounded-lg px-4 py-3">
+          <span className="text-2xl font-bold text-yellow-400">DRAW</span>
+        </div>
+      );
     }
     
-    return match.result.didIWin ? 
-      <span className="text-green-400 font-semibold">WON</span> :
-      <span className="text-red-400 font-semibold">LOST</span>;
+    return match.result.didIWin ? (
+      <div className="flex flex-col items-center justify-center bg-green-900/20 border border-green-500/30 rounded-lg px-4 py-3">
+        <span className="text-2xl font-bold text-green-400">WIN</span>
+      </div>
+    ) : (
+      <div className="flex flex-col items-center justify-center bg-red-900/20 border border-red-500/30 rounded-lg px-4 py-3">
+        <span className="text-2xl font-bold text-red-400">LOST</span>
+      </div>
+    );
+  };
+
+  const getWinningsText = () => {
+    if (!match.result) return null;
+    
+    if (match.result.isDraw) {
+      return (
+        <div className="text-center">
+          <span className="text-gray-400">Refunded</span>
+          <span className="text-gray-400 ml-1">Pot</span>
+        </div>
+      );
+    }
+    
+    if (match.result.didIWin) {
+      const netWinnings = match.result.payoutWinner - match.totalStake;
+      return (
+        <div className="text-center">
+          <span className="text-green-400 font-mono font-bold text-lg">
+            +{netWinnings.toLocaleString()}
+          </span>
+          <span className="text-gray-400 ml-1">Pot</span>
+        </div>
+      );
+    } else {
+      return (
+        <div className="text-center">
+          <span className="text-red-400 font-mono font-bold text-lg">
+            -{match.totalStake.toLocaleString()}
+          </span>
+          <span className="text-gray-400 ml-1">Pot</span>
+        </div>
+      );
+    }
   };
 
   const formatMoves = (moves: string[]) => {
@@ -161,8 +205,10 @@ function MatchCard({
 
   return (
     <div className="border border-white/20 rounded-xl p-6 bg-white/5 hover:bg-white/10 transition-colors">
+      
+      {/* Header Section */}
       <div className="flex items-start justify-between mb-4">
-        <div>
+        <div className="flex-1">
           <div className="flex items-center gap-3 mb-2">
             <h3 className="text-xl font-semibold">
               vs {match.opponent?.displayName || "Unknown"}
@@ -170,7 +216,6 @@ function MatchCard({
             <span className={`px-2 py-1 rounded text-xs font-medium ${getStatusBadge(match.status)}`}>
               {match.status.replace("_", " ")}
             </span>
-            {getResultText()}
           </div>
           
           <div className="text-sm text-gray-400">
@@ -180,14 +225,18 @@ function MatchCard({
           </div>
         </div>
         
-        <div className="text-right">
-          <div className="text-lg font-mono">{match.totalStake * 2} pot</div>
-          {match.result && (
-            <div className="text-sm text-gray-400">
-              {match.result.isDraw ? "Refunded" : 
-               match.result.didIWin ? `+${match.result.payoutWinner}` : "Lost"}
+        {/* Result and Winnings Section */}
+        <div className="flex items-center gap-6">
+          {/* Large Result Text */}
+          {getResultText()}
+          
+          {/* Winnings */}
+          <div className="text-right">
+            {getWinningsText()}
+            <div className="text-sm text-gray-400 mt-1">
+              Total Pot: {match.result?.pot.toLocaleString() || (match.totalStake * 2).toLocaleString()}
             </div>
-          )}
+          </div>
         </div>
       </div>
 
@@ -196,18 +245,35 @@ function MatchCard({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-white/10">
           <div>
             <h4 className="font-semibold mb-2">Round Results</h4>
-            <div className="text-sm">
-              <div>Your wins: {match.result.myWins}</div>
-              <div>Opponent wins: {match.result.opponentWins}</div>
-              <div>Draws: {match.result.draws}</div>
+            <div className="text-sm space-y-1">
+              <div className="flex justify-between">
+                <span>Your wins:</span>
+                <span className="text-green-400 font-semibold">{match.result.myWins}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Opponent wins:</span>
+                <span className="text-red-400 font-semibold">{match.result.opponentWins}</span>
+              </div>
+              {match.result.draws > 0 && (
+                <div className="flex justify-between">
+                  <span>Draws:</span>
+                  <span className="text-yellow-400 font-semibold">{match.result.draws}</span>
+                </div>
+              )}
             </div>
           </div>
           
           <div>
             <h4 className="font-semibold mb-2">Moves</h4>
             <div className="text-sm space-y-1">
-              <div>You: {formatMoves(match.myMoves)}</div>
-              <div>Opponent: {formatMoves(match.opponentMoves)}</div>
+              <div className="flex justify-between">
+                <span>You:</span>
+                <span className="text-lg">{formatMoves(match.myMoves)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Opponent:</span>
+                <span className="text-lg">{formatMoves(match.opponentMoves)}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -220,7 +286,7 @@ function MatchCard({
           <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-5 gap-2">
             {match.result.roundsOutcome.map((round: any, index: number) => (
               <div key={index} className="text-center p-2 bg-white/5 rounded text-xs">
-                <div className="font-medium">Round {round.round}</div>
+                <div className="font-medium">Round {round.round || index + 1}</div>
                 <div className="flex justify-center gap-1 my-1">
                   <span>{formatMoves([match.isCreator ? round.a : round.b])}</span>
                   <span>vs</span>
@@ -248,7 +314,7 @@ function MatchCard({
             onClick={() => onReveal(match.id)}
             className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium transition-colors"
           >
-            Reveal Moves
+            🔓 Reveal Moves
           </button>
         </div>
       )}
