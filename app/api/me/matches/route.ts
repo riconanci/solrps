@@ -1,75 +1,105 @@
 // app/api/me/matches/route.ts
-import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+// ONLY API route code - limit to 9 most recent matches + auto cleanup
+
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "../../../../src/lib/db";
 import { getUserOrSeed } from "../../_utils";
 
-// Type for the session with includes
-type SessionWithRelations = {
-  id: string;
-  createdAt: Date;
-  status: string;
-  rounds: number;
-  stakePerRound: number;
-  totalStake: number;
-  creatorId: string;
-  challengerId: string | null;
-  creatorMoves: string | null;
-  challengerMoves: string | null;
-  creator: {
-    id: string;
-    displayName: string | null;
-  };
-  challenger: {
-    id: string;
-    displayName: string | null;
-  } | null;
-  result: {
-    id: string;
-    createdAt: Date;
-    roundsOutcome: string;
-    creatorWins: number;
-    challengerWins: number;
-    draws: number;
-    overall: string;
-    pot: number;
-    feesTreasury: number;
-    feesBurn: number;
-    payoutWinner: number;
-    winnerUserId: string | null;
-  } | null;
-};
-
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    const me = await getUserOrSeed();
+    const { searchParams } = new URL(req.url);
+    const userId = searchParams.get("userId");
     
-    // Get all sessions where user was creator or challenger and that have results
-    const sessions = await prisma.session.findMany({
-      where: {
-        OR: [
-          { creatorId: me.id },
-          { challengerId: me.id }
-        ],
-        status: { in: ["RESOLVED", "FORFEITED"] }
-      },
-      orderBy: { createdAt: "desc" },
-      include: { 
-        creator: true,
-        challenger: true,
-        result: true
-      },
-    }) as SessionWithRelations[];
+    if (!userId) {
+      return NextResponse.json({ 
+        error: "userId parameter required" 
+      }, { status: 400 });
+    }
 
-    // Transform the data for easier consumption on frontend
-    const matches = sessions.map((session: SessionWithRelations) => {
+    const me = await getUserOrSeed(req);
+    
+    // Get only the 9 most recent sessions for this user + auto cleanup in transaction
+    const result = await prisma.$transaction(async (tx: any) => {
+      // First get all sessions for this user to identify old ones
+      const allUserSessions = await tx.session.findMany({
+        where: {
+          OR: [
+            { creatorId: me.id },
+            { challengerId: me.id }
+          ],
+          status: {
+            in: ['RESOLVED', 'AWAITING_REVEAL', 'FORFEITED', 'CANCELLED']
+          }
+        },
+        orderBy: {
+          createdAt: 'desc'
+        },
+        select: { id: true }
+      });
+
+      // If user has more than 9 sessions, delete the old ones beyond 9 most recent
+      if (allUserSessions.length > 9) {
+        const sessionsToDelete = allUserSessions.slice(9); // Keep first 9, delete rest
+        const sessionIdsToDelete = sessionsToDelete.map(s => s.id);
+        
+        console.log(`🧹 Auto-cleanup: Removing ${sessionIdsToDelete.length} old sessions for ${me.displayName}`);
+        
+        // Delete old match results first (foreign key constraint)
+        await tx.matchResult.deleteMany({
+          where: {
+            sessionId: { in: sessionIdsToDelete }
+          }
+        });
+        
+        // Then delete old sessions
+        await tx.session.deleteMany({
+          where: {
+            id: { in: sessionIdsToDelete }
+          }
+        });
+      }
+
+      // Now get the 9 most recent sessions with full data
+      const sessions = await tx.session.findMany({
+        where: {
+          OR: [
+            { creatorId: me.id },
+            { challengerId: me.id }
+          ],
+          status: {
+            in: ['RESOLVED', 'AWAITING_REVEAL', 'FORFEITED', 'CANCELLED']
+          }
+        },
+        include: {
+          creator: {
+            select: { id: true, displayName: true }
+          },
+          challenger: {
+            select: { id: true, displayName: true }
+          },
+          result: true
+        },
+        orderBy: {
+          createdAt: 'desc'  // Most recent first
+        },
+        take: 9  // LIMIT TO 9 MOST RECENT MATCHES
+      });
+
+      return sessions;
+    });
+
+    console.log(`📊 Found ${result.length} recent matches for ${me.displayName} (after cleanup)`);
+
+    // Transform sessions to match data format
+    const matches = result.map((session: any) => {
       const isCreator = session.creatorId === me.id;
       const opponent = isCreator ? session.challenger : session.creator;
       
-      // Parse stringified JSON fields safely
+      // Parse moves if they exist (handle both string and array formats)
       let creatorMoves: string[] = [];
       let challengerMoves: string[] = [];
       let roundsOutcome: any[] = [];
-      
+
       try {
         if (session.creatorMoves) {
           creatorMoves = typeof session.creatorMoves === 'string' 
@@ -97,6 +127,7 @@ export async function GET() {
         rounds: session.rounds,
         stakePerRound: session.stakePerRound,
         totalStake: session.totalStake,
+        joinType: session.joinType || 'PUBLIC', // Include join type for display
         
         // Player info
         isCreator,
@@ -122,6 +153,7 @@ export async function GET() {
           pot: session.result.pot,
           feesTreasury: session.result.feesTreasury,
           feesBurn: session.result.feesBurn,
+          feesWeeklyRewards: session.result.feesWeeklyRewards,
           payoutWinner: session.result.payoutWinner,
           
           // Calculated fields for easier display
@@ -135,7 +167,9 @@ export async function GET() {
 
     return NextResponse.json({ 
       success: true,
-      matches 
+      matches,
+      totalShown: matches.length,
+      isLimited: matches.length === 9
     });
 
   } catch (error: any) {

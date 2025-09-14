@@ -1,4 +1,4 @@
-// app/my/page.tsx - Grid layout with max rounds and navigation
+// app/my/page.tsx - EXACT ORIGINAL GITHUB FORMAT with 9 match limit
 "use client";
 import { useEffect, useState } from "react";
 import { useWallet } from "../../src/state/wallet";
@@ -97,42 +97,45 @@ export default function MyMatchesPage() {
   };
 
   const calculateStats = (matchData: MatchData[]) => {
-    const resolvedMatches = matchData.filter(m => m.result);
-    const gamesPlayed = resolvedMatches.length;
-    const gamesWon = resolvedMatches.filter(m => m.result?.didIWin).length;
-    const gamesDraw = resolvedMatches.filter(m => m.result?.isDraw).length;
-    const gamesLost = gamesPlayed - gamesWon - gamesDraw;
-    
-    let totalEarned = 0;
-    let totalLost = 0;
+    if (matchData.length === 0) return;
+
+    let gamesWon = 0, gamesLost = 0, gamesDraw = 0;
+    let totalEarned = 0, totalLost = 0;
+    let streaks: number[] = [];
     let currentStreak = 0;
-    let longestWinStreak = 0;
-    let tempStreak = 0;
-    
-    resolvedMatches.forEach((match, index) => {
-      if (match.result?.didIWin) {
-        const winnings = match.result.pot - (match.result.feesTreasury + match.result.feesBurn) - match.totalStake;
-        totalEarned += winnings;
-        tempStreak++;
-        if (index === 0) currentStreak = tempStreak;
-      } else if (match.result?.isDraw) {
-        tempStreak = 0;
-        if (index === 0) currentStreak = 0;
-      } else {
-        totalLost += match.totalStake;
-        tempStreak = 0;
-        if (index === 0) currentStreak = 0;
-      }
+
+    matchData.forEach((match, index) => {
+      if (!match.result) return;
+
+      const isWin = match.result.didIWin;
+      const isDraw = match.result.isDraw;
       
-      longestWinStreak = Math.max(longestWinStreak, tempStreak);
+      if (isWin) {
+        gamesWon++;
+        totalEarned += (match.result.payoutWinner - match.totalStake);
+        currentStreak = currentStreak >= 0 ? currentStreak + 1 : 1;
+      } else if (isDraw) {
+        gamesDraw++;
+        currentStreak = 0;
+      } else {
+        gamesLost++;
+        totalLost += match.totalStake;
+        currentStreak = currentStreak <= 0 ? currentStreak - 1 : -1;
+      }
+
+      streaks.push(currentStreak);
     });
+
+    const gamesPlayed = gamesWon + gamesLost + gamesDraw;
+    const winPercentage = gamesPlayed > 0 ? Math.round((gamesWon / gamesPlayed) * 100) : 0;
+    const longestWinStreak = Math.max(...streaks.filter(s => s > 0), 0);
 
     setStats({
       gamesPlayed,
       gamesWon,
       gamesLost,
       gamesDraw,
-      winPercentage: gamesPlayed > 0 ? Math.round((gamesWon / gamesPlayed) * 100) : 0,
+      winPercentage,
       totalEarned,
       totalLost,
       netAmount: totalEarned - totalLost,
@@ -197,14 +200,14 @@ export default function MyMatchesPage() {
     }
   };
 
-  // Match card component with limited rounds display
+  // Match card component - ORIGINAL EMOJI GRID FORMAT
   const MatchCard = ({ match, isRecent }: { match: MatchData; isRecent: boolean }) => {
     const [currentRoundStart, setCurrentRoundStart] = useState(0);
     const maxVisibleRounds = 3; // Show max 3 rounds at a time
-    const totalRounds = match.myMoves.length;
+    const totalRounds = match.myMoves?.length || 0;
     const hasMoreRounds = totalRounds > maxVisibleRounds;
-    const visibleMoves = match.myMoves.slice(currentRoundStart, currentRoundStart + maxVisibleRounds);
-    const visibleOpponentMoves = match.opponentMoves.slice(currentRoundStart, currentRoundStart + maxVisibleRounds);
+    const visibleMoves = match.myMoves?.slice(currentRoundStart, currentRoundStart + maxVisibleRounds) || [];
+    const visibleOpponentMoves = match.opponentMoves?.slice(currentRoundStart, currentRoundStart + maxVisibleRounds) || [];
 
     const canScrollLeft = currentRoundStart > 0;
     const canScrollRight = currentRoundStart + maxVisibleRounds < totalRounds;
@@ -243,8 +246,8 @@ export default function MyMatchesPage() {
           </div>
         </div>
 
-        {/* Moves display with navigation */}
-        {match.result && (
+        {/* Moves display - ORIGINAL EMOJI GRID FORMAT */}
+        {match.result && match.myMoves && match.opponentMoves && (
           <div className="bg-white/5 rounded-lg p-3 mb-3">
             <div className="flex items-center justify-between mb-2">
               <div className="text-xs text-gray-400">Moves</div>
@@ -255,22 +258,19 @@ export default function MyMatchesPage() {
                     disabled={!canScrollLeft}
                     className={`w-6 h-6 rounded flex items-center justify-center text-xs ${
                       canScrollLeft 
-                        ? 'bg-white/10 hover:bg-white/20 text-white' 
-                        : 'bg-white/5 text-gray-500 cursor-not-allowed'
+                        ? 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30' 
+                        : 'bg-gray-500/20 text-gray-500 cursor-not-allowed'
                     }`}
                   >
                     ←
                   </button>
-                  <div className="text-xs text-gray-400 px-2 flex items-center">
-                    {Math.floor(currentRoundStart / maxVisibleRounds) + 1}/{Math.ceil(totalRounds / maxVisibleRounds)}
-                  </div>
                   <button
                     onClick={scrollRight}
                     disabled={!canScrollRight}
                     className={`w-6 h-6 rounded flex items-center justify-center text-xs ${
                       canScrollRight 
-                        ? 'bg-white/10 hover:bg-white/20 text-white' 
-                        : 'bg-white/5 text-gray-500 cursor-not-allowed'
+                        ? 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30' 
+                        : 'bg-gray-500/20 text-gray-500 cursor-not-allowed'
                     }`}
                   >
                     →
@@ -278,48 +278,57 @@ export default function MyMatchesPage() {
                 </div>
               )}
             </div>
-
-            <div className="space-y-1">
-              {/* Your moves */}
-              <div className="flex items-center gap-1">
-                <div className="text-xs text-blue-400 font-medium w-10">You:</div>
+            
+            {/* ORIGINAL FORMAT: Two rows of emoji grids */}
+            <div className="space-y-2">
+              {/* You row */}
+              <div className="flex items-center gap-2">
+                <div className="text-xs text-blue-400 font-medium w-8">You:</div>
                 <div className="flex gap-1">
-                  {visibleMoves.map((move, index) => (
-                    <div key={currentRoundStart + index} className="w-8 h-8 flex items-center justify-center bg-blue-900/30 border border-blue-500/50 rounded text-lg">
-                      {getMoveEmoji(move)}
+                  {visibleMoves.map((myMove, idx) => (
+                    <div key={idx} className="w-8 h-8 bg-blue-500/20 rounded flex items-center justify-center text-lg">
+                      {getMoveEmoji(myMove)}
                     </div>
                   ))}
                 </div>
               </div>
               
-              {/* Opponent moves */}
-              <div className="flex items-center gap-1">
-                <div className="text-xs text-red-400 font-medium w-10">Opp:</div>
+              {/* Opponent row */}
+              <div className="flex items-center gap-2">
+                <div className="text-xs text-red-400 font-medium w-8">Opp:</div>
                 <div className="flex gap-1">
-                  {visibleOpponentMoves.map((move, index) => (
-                    <div key={currentRoundStart + index} className="w-8 h-8 flex items-center justify-center bg-red-900/30 border border-red-500/50 rounded text-lg">
-                      {getMoveEmoji(move)}
+                  {visibleOpponentMoves.map((opponentMove, idx) => (
+                    <div key={idx} className="w-8 h-8 bg-red-500/20 rounded flex items-center justify-center text-lg">
+                      {getMoveEmoji(opponentMove)}
                     </div>
                   ))}
                 </div>
               </div>
             </div>
 
-            {/* Score */}
-            <div className="text-xs text-center mt-2 text-gray-300">
-              Score: {match.result.myWins}-{match.result.opponentWins}
-              {match.result.draws > 0 && ` (${match.result.draws} draws)`}
+            {/* Score display - ORIGINAL FORMAT */}
+            <div className="flex justify-center mt-3">
+              <div className="text-sm text-gray-300">
+                Score: {match.result.myWins}-{match.result.opponentWins}
+                {match.result.draws > 0 && ` (${match.result.draws} draws)`}
+              </div>
             </div>
+
+            {hasMoreRounds && (
+              <div className="text-xs text-gray-500 text-center mt-2">
+                Showing rounds {currentRoundStart + 1}-{Math.min(currentRoundStart + maxVisibleRounds, totalRounds)} of {totalRounds}
+              </div>
+            )}
           </div>
         )}
 
-        {/* Result */}
+        {/* Result section - ORIGINAL FORMAT */}
         <div className="text-center">
           {match.result ? (
             <>
               <div className="font-mono text-lg font-bold">
                 {match.result.isDraw ? '±0' : match.result.didIWin ? 
-                  `+${(match.result.pot - (match.result.feesTreasury + match.result.feesBurn) - match.totalStake).toLocaleString()}` :
+                  `+${(match.result.payoutWinner - match.totalStake).toLocaleString()}` :
                   `-${match.totalStake.toLocaleString()}`
                 } RPS
               </div>
@@ -405,7 +414,8 @@ export default function MyMatchesPage() {
             <div className="text-xs text-gray-400">Win Rate</div>
           </div>
           <div className="text-center">
-            <div className={`text-2xl font-bold ${stats.netAmount >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+            <div className={`text-2xl font-bold ${stats.netAmount >= 0 ? 
+              'text-green-400' : 'text-red-400'}`}>
               {stats.netAmount >= 0 ? '+' : ''}{stats.netAmount.toLocaleString()}
             </div>
             <div className="text-xs text-gray-400">Net RPS</div>
