@@ -1,4 +1,4 @@
-// src/components/JoinSessionModal.tsx - Clean version without Phase 2 dependencies
+// src/components/JoinSessionModal.tsx - FIXED USER DETECTION
 "use client";
 import { useState } from "react";
 import { useWallet } from "../state/wallet";
@@ -8,6 +8,7 @@ type Move = 'R' | 'P' | 'S';
 interface SessionData {
   id: string;
   creator: string;
+  creatorId: string;
   rounds: number;
   stakePerRound: number;
   totalStake: number;
@@ -18,23 +19,30 @@ interface SessionData {
 interface JoinSessionModalProps {
   session: SessionData;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (result: any) => void;
 }
 
 export function JoinSessionModal({ session, onClose, onSuccess }: JoinSessionModalProps) {
   const wallet = useWallet();
   const [selectedMoves, setSelectedMoves] = useState<Move[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState('');
 
   const getMoveEmoji = (move: Move) => {
     const emojis = { R: '🪨', P: '📄', S: '✂️' };
     return emojis[move];
   };
 
+  const getMoveLabel = (move: Move) => {
+    const labels = { R: 'Rock', P: 'Paper', S: 'Scissors' };
+    return labels[move];
+  };
+
   const selectMove = (roundIndex: number, move: Move) => {
     const newMoves = [...selectedMoves];
     newMoves[roundIndex] = move;
     setSelectedMoves(newMoves);
+    setError(''); // Clear error when user makes changes
   };
 
   const canJoin = selectedMoves.filter(Boolean).length === session.rounds && 
@@ -43,136 +51,143 @@ export function JoinSessionModal({ session, onClose, onSuccess }: JoinSessionMod
   const handleJoinGame = async () => {
     if (!canJoin) return;
 
+    // Double-check user detection before joining
+    console.log(`🎮 Join attempt: ${wallet.displayName} (${wallet.userId}) joining ${session.creator}'s game`);
+    
+    if (wallet.userId === session.creatorId) {
+      setError("You cannot join your own game!");
+      return;
+    }
+
     setIsSubmitting(true);
+    setError('');
+
     try {
+      // Create request body with explicit user context
+      const requestBody = {
+        sessionId: session.id,
+        challengerMoves: selectedMoves,
+        userId: wallet.userId, // Explicitly pass user ID
+        joinType: 'PUBLIC'
+      };
+
+      console.log('🎮 Join request body:', requestBody);
+
       const response = await fetch('/api/session/join', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: session.id,
-          challengerMoves: selectedMoves,
-        }),
+        headers: { 
+          'Content-Type': 'application/json',
+          // Add custom header for user detection
+          'X-User-ID': wallet.userId || '',
+          'X-User-Name': wallet.displayName || ''
+        },
+        body: JSON.stringify(requestBody),
       });
 
       if (!response.ok) {
-        throw new Error('Failed to join game');
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP ${response.status}`);
       }
 
       const result = await response.json();
+      console.log('🎉 Join successful:', result);
       
-      // For now, just show a simple alert with results
-      // Later we can add a proper results modal
-      alert(`Game completed! Result: ${JSON.stringify(result, null, 2)}`);
-      
-      onSuccess();
-      onClose();
-    } catch (error) {
-      console.error('Failed to join game:', error);
-      alert('Failed to join game. Please try again.');
+      if (result.success) {
+        onSuccess(result);
+        onClose();
+      } else {
+        throw new Error(result.error || 'Join failed');
+      }
+
+    } catch (error: any) {
+      console.error('❌ Failed to join game:', error);
+      setError(error.message || 'Failed to join game. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-slate-800 rounded-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+      <div className="bg-slate-800 rounded-xl p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-xl font-bold">Join Game</h2>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-white text-2xl"
-          >
-            ×
-          </button>
+        <div className="text-center mb-6">
+          <h2 className="text-xl font-bold mb-2">Join Game</h2>
+          <div className="text-sm text-gray-400">
+            Playing against <span className="text-white font-medium">{session.creator}</span>
+          </div>
+          <div className="text-sm text-gray-400">
+            As: <span className="text-blue-400 font-medium">{wallet.displayName} ({wallet.userId?.slice(-4)})</span>
+          </div>
         </div>
 
         {/* Game Info */}
         <div className="bg-white/5 rounded-lg p-4 mb-6">
-          <div className="text-sm space-y-2">
-            <div className="flex justify-between">
-              <span>Rounds:</span>
-              <span className="font-medium">{session.rounds}</span>
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            <div>
+              <div className="text-gray-400">Rounds</div>
+              <div className="font-mono">{session.rounds}</div>
             </div>
-            <div className="flex justify-between">
-              <span>Your Stake:</span>
-              <span className="font-mono">{session.totalStake.toLocaleString()} RPS</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Total Pot:</span>
-              <span className="font-mono">{(session.totalStake * 2).toLocaleString()} RPS</span>
-            </div>
-            <div className="flex justify-between text-green-400">
-              <span>Winner Gets:</span>
-              <span className="font-mono">
-                {Math.floor(session.totalStake * 2 * 0.95).toLocaleString()} RPS
-              </span>
+            <div>
+              <div className="text-gray-400">Total Stake</div>
+              <div className="font-mono text-yellow-400">{session.totalStake.toLocaleString()} RPS</div>
             </div>
           </div>
         </div>
 
-        {/* Move Selection Progress */}
-        <div className="mb-4">
-          <div className="flex justify-between items-center mb-2">
-            <span className="text-sm font-medium">Select Your Moves</span>
-            <span className="text-sm text-gray-400">
-              {selectedMoves.filter(Boolean).length}/{session.rounds}
-            </span>
-          </div>
+        {/* Move Selection */}
+        <div className="mb-6">
+          <h3 className="text-lg font-medium mb-4">Select Your Moves</h3>
           
-          {/* Progress indicators */}
-          <div className="flex gap-1 mb-4">
-            {Array.from({ length: session.rounds }, (_, i) => (
-              <div
-                key={i}
-                className={`h-2 flex-1 rounded ${
-                  selectedMoves[i] ? "bg-green-500" : "bg-gray-600"
-                }`}
-              />
+          <div className="space-y-4">
+            {Array.from({ length: session.rounds }, (_, roundIndex) => (
+              <div key={roundIndex} className="bg-white/5 rounded-lg p-4">
+                <div className="text-sm text-gray-400 mb-3">Round {roundIndex + 1}</div>
+                
+                <div className="grid grid-cols-3 gap-2 mb-3">
+                  {(['R', 'P', 'S'] as Move[]).map((move) => (
+                    <button
+                      key={move}
+                      onClick={() => selectMove(roundIndex, move)}
+                      className={`p-3 rounded-lg border-2 transition-all text-center ${
+                        selectedMoves[roundIndex] === move
+                          ? 'bg-blue-600 text-white border-blue-400'
+                          : 'bg-white/10 hover:bg-white/20 border-transparent'
+                      }`}
+                    >
+                      <div className="text-2xl mb-1">{getMoveEmoji(move)}</div>
+                      <div className="text-xs">{getMoveLabel(move)}</div>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="text-center">
+                  <div className="text-2xl">
+                    {selectedMoves[roundIndex] ? getMoveEmoji(selectedMoves[roundIndex]) : '❓'}
+                  </div>
+                  <div className="text-xs text-gray-400 mt-1">
+                    {selectedMoves[roundIndex] ? getMoveLabel(selectedMoves[roundIndex]) : 'Choose your move'}
+                  </div>
+                </div>
+              </div>
             ))}
           </div>
         </div>
 
-        {/* Round Selection */}
-        <div className="space-y-3 mb-6">
-          {Array.from({ length: session.rounds }, (_, roundIndex) => (
-            <div key={roundIndex} className="bg-white/5 rounded-lg p-3">
-              <div className="flex items-center justify-between">
-                <span className="text-white text-sm font-medium min-w-[32px]">
-                  R{roundIndex + 1}:
-                </span>
-                
-                <div className="flex gap-2">
-                  {(["R", "P", "S"] as Move[]).map((move) => {
-                    const isSelected = selectedMoves[roundIndex] === move;
-                    
-                    return (
-                      <button
-                        key={move}
-                        onClick={() => selectMove(roundIndex, move)}
-                        disabled={isSubmitting}
-                        className={`
-                          flex items-center justify-center w-10 h-10 rounded-lg border transition-all
-                          ${isSelected 
-                            ? "border-blue-500 bg-blue-500/20 text-white scale-110" 
-                            : "border-white/20 bg-white/5 text-gray-300 hover:border-white/40 hover:bg-white/10 hover:scale-105"
-                          }
-                          ${isSubmitting ? "opacity-50 cursor-not-allowed" : ""}
-                        `}
-                      >
-                        <span className="text-lg">{getMoveEmoji(move)}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-                
-                <span className="text-xs text-gray-400 min-w-[60px] text-right">
-                  {selectedMoves[roundIndex] ? getMoveEmoji(selectedMoves[roundIndex]) : "?"}
-                </span>
-              </div>
-            </div>
-          ))}
+        {/* Progress */}
+        <div className="mb-6">
+          <div className="flex justify-between text-sm mb-2">
+            <span className="text-gray-400">Progress</span>
+            <span className="text-blue-400">
+              {selectedMoves.filter(Boolean).length} / {session.rounds}
+            </span>
+          </div>
+          <div className="w-full bg-white/10 rounded-full h-2">
+            <div 
+              className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+              style={{ width: `${(selectedMoves.filter(Boolean).length / session.rounds) * 100}%` }}
+            />
+          </div>
         </div>
 
         {/* Balance Check */}
@@ -188,7 +203,14 @@ export function JoinSessionModal({ session, onClose, onSuccess }: JoinSessionMod
           )}
         </div>
 
-        {/* Action Buttons */}
+        {/* Error Display */}
+        {error && (
+          <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 mb-6">
+            <div className="text-red-400 text-sm">{error}</div>
+          </div>
+        )}
+
+        {/* Actions */}
         <div className="flex gap-3">
           <button
             onClick={onClose}
@@ -201,28 +223,22 @@ export function JoinSessionModal({ session, onClose, onSuccess }: JoinSessionMod
           <button
             onClick={handleJoinGame}
             disabled={!canJoin || isSubmitting}
-            className={`flex-1 py-3 rounded-lg font-medium transition-colors ${
+            className={`flex-1 py-3 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 ${
               canJoin && !isSubmitting
                 ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                : 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                : 'bg-gray-500 text-gray-300 cursor-not-allowed'
             }`}
           >
-            {isSubmitting ? 'Joining...' : 'Join Game'}
+            {isSubmitting ? (
+              <>
+                <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                Joining...
+              </>
+            ) : (
+              'Join Game'
+            )}
           </button>
         </div>
-
-        {/* Error Messages */}
-        {!canJoin && selectedMoves.filter(Boolean).length === session.rounds && (
-          <p className="text-red-400 text-sm text-center mt-3">
-            Insufficient balance to join this game
-          </p>
-        )}
-
-        {!canJoin && selectedMoves.filter(Boolean).length !== session.rounds && (
-          <p className="text-yellow-400 text-sm text-center mt-3">
-            Please select moves for all rounds
-          </p>
-        )}
       </div>
     </div>
   );

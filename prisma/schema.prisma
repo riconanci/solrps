@@ -1,375 +1,141 @@
-// 1. Database Schema Update (prisma/schema.prisma)
-// Add this field to the Session model:
+// prisma/schema.prisma - UPDATED TO STORE ALICE'S ACTUAL MOVES
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String @id @default(cuid())
+  displayName  String?
+  mockBalance  Int    @default(0)
+  createdAt    DateTime @default(now())
+  
+  // Relationships
+  createdSessions Session[] @relation("CreatorSessions")
+  joinedSessions  Session[] @relation("ChallengerSessions")
+  matchResults    MatchResult[]
+  weeklyRewards   WeeklyReward[]
+  devRewards      DevReward[]
+
+  @@map("users")
+}
 
 model Session {
+  id              String   @id @default(cuid())
+  status          String   @default("OPEN") // OPEN, AWAITING_REVEAL, RESOLVED
+  rounds          Int
+  stakePerRound   Int
+  totalStake      Int
+  commitHash      String
+  saltHint        String?
+  createdAt       DateTime @default(now())
+  revealDeadline  DateTime
+  isPrivate       Boolean  @default(false)
+  resolvedAt      DateTime?
+
+  // Creator information
+  creatorId       String
+  creator         User     @relation("CreatorSessions", fields: [creatorId], references: [id])
+  
+  // NEW FIELDS: Store Alice's actual moves and salt
+  creatorMoves    String?  // JSON string of Move[] - Alice's actual selected moves
+  creatorSalt     String?  // Salt used for commit hash
+  creatorRevealed Boolean  @default(false)
+
+  // Challenger information
+  challengerId    String?
+  challenger      User?    @relation("ChallengerSessions", fields: [challengerId], references: [id])
+  challengerMoves String?  // JSON string of Move[]
+
+  // Results
+  result          MatchResult?
+
+  @@map("sessions")
+}
+
+model MatchResult {
   id            String   @id @default(cuid())
-  creatorId     String
-  challengerId  String?
-  rounds        Int
-  stakePerRound Int
-  totalStake    Int
-  status        String   @default("OPEN")
+  sessionId     String   @unique
+  session       Session  @relation(fields: [sessionId], references: [id])
+  
+  // Game outcome
+  winnerUserId  String?
+  winner        User?    @relation(fields: [winnerUserId], references: [id])
+  creatorWins   Int      @default(0)
+  challengerWins Int     @default(0)
+  draws         Int      @default(0)
+  
+  // Financial details
+  pot           Int
+  payoutWinner  Int      @default(0)
+  payoutLoser   Int      @default(0)
+  
+  // Fee breakdown
+  feeTotal      Int      @default(0)
+  feeTreasury   Int      @default(0)
+  feeBurn       Int      @default(0)
+  feeDev        Int      @default(0)
+  feeWeekly     Int      @default(0)
+  
+  // Additional data
+  roundsOutcome String?  // JSON string of round-by-round results
+  replaySeed    String?
+  
   createdAt     DateTime @default(now())
+
+  @@map("match_results")
+}
+
+// Weekly rewards system
+model WeeklyPeriod {
+  id               String   @id @default(cuid())
+  weekStart        DateTime @unique
+  weekEnd          DateTime
+  totalRewardsPool Int      @default(0)
+  rolloverAmount   Int      @default(0)  // Amount rolled over from previous week
+  isDistributed    Boolean  @default(false)
+  distributedAt    DateTime?
   
-  // Add this new field
-  joinType      String   @default("PUBLIC")  // "PUBLIC" or "PRIVATE"
+  rewards          WeeklyReward[]
   
-  // ... rest of your existing fields
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("weekly_periods")
 }
 
-// 2. Updated Lobby Page - Track join type
-// In your enhanced lobby page, modify the handleManualJoin function:
+model WeeklyReward {
+  id            String       @id @default(cuid())
+  weeklyPeriodId String
+  weeklyPeriod  WeeklyPeriod @relation(fields: [weeklyPeriodId], references: [id])
+  
+  userId        String
+  user          User         @relation(fields: [userId], references: [id])
+  
+  rank          Int
+  points        Int
+  rewardAmount  Int
+  isClaimed     Boolean      @default(false)
+  claimedAt     DateTime?
+  
+  createdAt     DateTime     @default(now())
 
-const handleManualJoin = async () => {
-  if (!manualSessionId.trim()) {
-    alert('Please enter a session ID');
-    return;
-  }
-
-  setManualJoinLoading(true);
-
-  try {
-    // First fetch the session details to validate it exists
-    const response = await fetch(`/api/session/${manualSessionId.trim()}`);
-    
-    if (!response.ok) {
-      throw new Error('Session not found or invalid');
-    }
-
-    const sessionData = await response.json();
-    
-    if (!sessionData.success) {
-      throw new Error(sessionData.error || 'Failed to fetch session');
-    }
-
-    const session = sessionData.session;
-
-    // Check if user can afford it
-    const balance = wallet.balance || 0;
-    if (balance < session.totalStake) {
-      alert(`Insufficient balance! You need ${session.totalStake.toLocaleString()} tokens but only have ${balance.toLocaleString()}.`);
-      return;
-    }
-
-    // Check if it's their own session
-    if (session.creatorId === wallet.userId) {
-      alert('You cannot join your own game!');
-      return;
-    }
-
-    // Check if session is still open
-    if (session.status !== 'OPEN') {
-      alert('This game is no longer available to join');
-      return;
-    }
-
-    // Add joinType to the session object so we can track it
-    session.joinType = 'PRIVATE';
-
-    // If all checks pass, open the join modal
-    setSelectedSession(session);
-    setShowManualJoin(false);
-    setManualSessionId('');
-
-  } catch (error: any) {
-    console.error('Manual join error:', error);
-    alert(error.message || 'Failed to join game. Please check the session ID.');
-  } finally {
-    setManualJoinLoading(false);
-  }
-};
-
-// 3. Updated Join Game Modal - Pass join type to API
-// In your JoinGameModal component, modify the handleSubmit function:
-
-const handleSubmit = async () => {
-  if (!canJoin || submitting) return;
-
-  setSubmitting(true);
-  setError('');
-
-  try {
-    console.log('Joining game:', session.id, 'with moves:', moves);
-    
-    const response = await fetch('/api/session/join', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: session.id,
-        challengerMoves: moves,
-        joinType: session.joinType || 'PUBLIC' // Pass the join type
-      })
-    });
-
-    const result = await response.json();
-    console.log('Join result:', result);
-
-    if (result.success) {
-      onComplete(result);
-    } else {
-      throw new Error(result.error || 'Failed to join game');
-    }
-  } catch (error: any) {
-    console.error('Join game error:', error);
-    setError(error.message || 'Failed to join game');
-  } finally {
-    setSubmitting(false);
-  }
-};
-
-// 4. Updated Session Join API - Store join type and exclude from rewards
-// Replace app/api/session/join/route.ts with this updated version:
-
-import { NextResponse } from "next/server";
-import { z } from "zod";
-import { prisma } from "@/lib/db";
-import { getUserOrSeed } from "../../_utils";
-import { calcPot, payoutFromPot } from "@/lib/payout";
-import { tallyOutcome } from "@/lib/rps";
-import type { Move } from "@/lib/hash";
-
-// Updated schema to include join type
-const joinSessionSchema = z.object({
-  sessionId: z.string(),
-  challengerMoves: z.array(z.enum(['R', 'P', 'S'])),
-  joinType: z.enum(['PUBLIC', 'PRIVATE']).default('PUBLIC')
-});
-
-export async function POST(req: Request) {
-  try {
-    const body = await req.json();
-    const parsed = joinSessionSchema.safeParse(body);
-    
-    if (!parsed.success) {
-      return NextResponse.json({ 
-        success: false,
-        error: "Invalid request data", 
-        details: parsed.error.flatten() 
-      }, { status: 400 });
-    }
-
-    const { sessionId, challengerMoves, joinType } = parsed.data;
-    
-    // Get current user
-    const user = await getUserOrSeed(req);
-    console.log(`🎮 Join API: User ${user.displayName} (${user.id}) joining session ${sessionId} (${joinType})`);
-
-    const result = await prisma.$transaction(async (tx: any) => {
-      // Get session and validate
-      const session = await tx.session.findUnique({
-        where: { id: sessionId },
-        include: { 
-          creator: true,
-          result: true
-        }
-      });
-
-      if (!session) {
-        throw new Error("Session not found");
-      }
-
-      console.log(`🎮 Session status: ${session.status}, Creator: ${session.creator.displayName} (${session.creatorId})`);
-
-      if (session.status !== "OPEN") {
-        throw new Error("Session is not open for joining");
-      }
-
-      if (session.creatorId === user.id) {
-        throw new Error("Cannot join your own session");
-      }
-
-      // Check challenger has sufficient balance
-      if (user.mockBalance < session.totalStake) {
-        throw new Error(`Insufficient balance. Need ${session.totalStake}, have ${user.mockBalance}`);
-      }
-
-      // Validate challenger moves match session rounds
-      if (challengerMoves.length !== session.rounds) {
-        throw new Error(`Move count mismatch. Expected ${session.rounds} moves, got ${challengerMoves.length}`);
-      }
-
-      // Deduct challenger's stake
-      await tx.user.update({
-        where: { id: user.id },
-        data: { mockBalance: { decrement: session.totalStake } }
-      });
-
-      console.log(`💰 Debited ${session.totalStake} tokens from ${user.displayName}`);
-
-      // INSTANT RESOLUTION - Generate creator moves and resolve immediately
-      const creatorMoves = session.creatorMoves 
-        ? JSON.parse(session.creatorMoves) 
-        : Array(session.rounds).fill(0).map(() => ['R', 'P', 'S'][Math.floor(Math.random() * 3)]);
-
-      console.log(`🎲 Creator moves: ${creatorMoves.join(',')}, Challenger moves: ${challengerMoves.join(',')}`);
-
-      // Calculate outcome
-      const { aWins, bWins, draws, overall, outcomes } = tallyOutcome(creatorMoves, challengerMoves);
-      console.log(`🏆 Game result: Creator ${aWins}, Challenger ${bWins}, Draws ${draws}, Overall: ${overall}`);
-
-      // Calculate pot and payouts
-      const pot = calcPot(session.stakePerRound, session.rounds);
-      const { 
-        payoutWinner, 
-        feesBurn, 
-        feesTreasury, 
-        feesDev, 
-        feesWeeklyRewards 
-      } = payoutFromPot(pot);
-
-      let winnerUserId = null;
-
-      if (overall === "DRAW") {
-        console.log(`🤝 Draw! Refunding stakes to both players`);
-        // Refund both players
-        await tx.user.update({
-          where: { id: session.creatorId },
-          data: { mockBalance: { increment: session.totalStake } }
-        });
-        await tx.user.update({
-          where: { id: user.id },
-          data: { mockBalance: { increment: session.totalStake } }
-        });
-      } else {
-        // Winner gets payout
-        if (overall === "CREATOR") {
-          winnerUserId = session.creatorId;
-          console.log(`🎉 Creator won! Payout: ${payoutWinner} tokens`);
-          await tx.user.update({
-            where: { id: session.creatorId },
-            data: { mockBalance: { increment: payoutWinner } }
-          });
-        } else {
-          winnerUserId = user.id;
-          console.log(`🎉 Challenger won! Payout: ${payoutWinner} tokens`);
-          await tx.user.update({
-            where: { id: user.id },
-            data: { mockBalance: { increment: payoutWinner } }
-          });
-        }
-      }
-
-      // Update session to resolved and store join type
-      const updatedSession = await tx.session.update({
-        where: { id: sessionId },
-        data: {
-          status: "RESOLVED",
-          challengerId: user.id,
-          challengerMoves: JSON.stringify(challengerMoves),
-          creatorMoves: JSON.stringify(creatorMoves),
-          joinType: joinType // Store how this game was joined
-        },
-      });
-
-      // Create match result - EXCLUDE WEEKLY REWARDS FOR PRIVATE GAMES
-      const matchResult = await tx.matchResult.create({
-        data: {
-          sessionId,
-          roundsOutcome: JSON.stringify(outcomes),
-          creatorWins: aWins,
-          challengerWins: bWins,
-          draws,
-          overall,
-          pot,
-          feesBurn,
-          feesTreasury,
-          feesDev,
-          // CRITICAL: Set weekly rewards to 0 for private games
-          feesWeeklyRewards: joinType === 'PRIVATE' ? 0 : feesWeeklyRewards,
-          payoutWinner,
-          winnerUserId,
-          replaySeed: null,
-        }
-      });
-
-      // Log the weekly rewards exclusion
-      if (joinType === 'PRIVATE') {
-        console.log(`🔒 Private game: Weekly rewards excluded (${feesWeeklyRewards} tokens not added to pool)`);
-      } else {
-        console.log(`🏆 Public game: ${feesWeeklyRewards} tokens added to weekly rewards pool`);
-      }
-
-      return {
-        session: updatedSession,
-        matchResult,
-        outcomes,
-        creatorMoves,
-        challengerMoves,
-        isChallenger: true,
-        joinType
-      };
-    });
-
-    // Get updated user balance
-    const updatedUser = await prisma.user.findUnique({ 
-      where: { id: user.id } 
-    });
-
-    // Determine result for challenger's perspective
-    const didWin = result.matchResult.overall === "CHALLENGER";
-    const isDraw = result.matchResult.overall === "DRAW";
-    const balanceChange = isDraw ? 0 : (didWin ? result.matchResult.payoutWinner - result.session.totalStake : -result.session.totalStake);
-
-    console.log(`🎮 Final result for ${user.displayName}: ${didWin ? 'WIN' : isDraw ? 'DRAW' : 'LOSS'}, Balance change: ${balanceChange}`);
-
-    return NextResponse.json({
-      success: true,
-      didWin,
-      isDraw,
-      balanceChange,
-      newBalance: updatedUser?.mockBalance || 0,
-      creatorMoves: result.creatorMoves,
-      challengerMoves: result.challengerMoves,
-      joinType: result.joinType,
-      weeklyRewardsEligible: result.joinType === 'PUBLIC',
-      matchResult: {
-        creatorWins: result.matchResult.creatorWins,
-        challengerWins: result.matchResult.challengerWins,
-        draws: result.matchResult.draws,
-        pot: result.matchResult.pot,
-      },
-      message: result.joinType === 'PRIVATE' 
-        ? `${isDraw ? "Draw! " : didWin ? `You won ${result.matchResult.payoutWinner} tokens! ` : `You lost ${result.session.totalStake} tokens. `}(Private game - no leaderboard points)`
-        : isDraw 
-          ? "It's a draw! Stakes refunded." 
-          : didWin 
-            ? `You won ${result.matchResult.payoutWinner} tokens!` 
-            : `You lost ${result.session.totalStake} tokens.`
-    });
-
-  } catch (error: any) {
-    console.error("❌ Join session error:", error);
-    return NextResponse.json({ 
-      success: false,
-      error: error.message || "Failed to join session" 
-    }, { status: 500 });
-  }
+  @@unique([weeklyPeriodId, userId])
+  @@map("weekly_rewards")
 }
 
-// 5. Updated Weekly Leaderboard Calculation
-// The existing weekly.ts already filters based on feesWeeklyRewards > 0
-// So private games with feesWeeklyRewards = 0 will automatically be excluded from leaderboards
+model DevReward {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  amount      Int
+  isClaimed   Boolean  @default(false)
+  claimedAt   DateTime?
+  createdAt   DateTime @default(now())
 
-// 6. Database Migration Command
-// Run this to add the new field to existing sessions:
-
-// npx prisma db push
-
-// 7. Optional: Update existing sessions to be PUBLIC
-// Run this script once after the schema update:
-
-/*
-const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient();
-
-async function updateExistingSessions() {
-  await prisma.session.updateMany({
-    where: { joinType: null },
-    data: { joinType: 'PUBLIC' }
-  });
-  console.log("Updated existing sessions to PUBLIC");
-  await prisma.$disconnect();
+  @@map("dev_rewards")
 }
-
-updateExistingSessions();
-*/

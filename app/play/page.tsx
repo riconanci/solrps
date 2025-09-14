@@ -1,4 +1,4 @@
-// app/play/page.tsx - Complete rewrite with truly persistent games
+// app/play/page.tsx - COMPLETE VERSION WITH ALL ORIGINAL FEATURES + ALICE'S REAL MOVES FIX
 "use client";
 import { useEffect, useState } from "react";
 import { useWallet } from "../../src/state/wallet";
@@ -34,11 +34,43 @@ export default function PlayPage() {
   // Local storage key for persistent game tracking
   const STORAGE_KEY = `solrps_created_games_${wallet.userId || 'default'}`;
 
-  // Auto-connect wallet and load persistent games
+  // ENHANCED WALLET INITIALIZATION - Force correct user detection
   useEffect(() => {
+    const initializeWallet = async () => {
+      console.log('Initializing wallet...');
+      
+      // Force detect user from URL
+      const urlParams = new URLSearchParams(window.location.search);
+      const userParam = urlParams.get('user') || 'alice';
+      const targetUserId = userParam === 'alice' ? 'seed_alice' : 'seed_bob';
+      
+      console.log(`URL says user should be: ${userParam} (${targetUserId})`);
+      console.log(`Current wallet state:`, {
+        userId: wallet.userId,
+        displayName: wallet.displayName,
+        isConnected: wallet.isConnected
+      });
+      
+      // Force switch if needed
+      if (!wallet.isConnected || wallet.userId !== targetUserId) {
+        console.log(`Wallet needs switching from ${wallet.userId} to ${targetUserId}`);
+        
+        try {
+          await wallet.switchUser(targetUserId);
+          console.log(`Wallet switched successfully to: ${wallet.displayName} (${wallet.userId})`);
+        } catch (error) {
+          console.error('Failed to switch wallet:', error);
+        }
+      } else {
+        console.log(`Wallet already correct: ${wallet.displayName} (${wallet.userId})`);
+      }
+    };
+
+    // Initialize wallet first
     if (!wallet.userId) {
-      wallet.connect('seed_alice', 500000, 'Alice');
+      initializeWallet();
     } else {
+      // If wallet already connected, load persistent games
       loadPersistentGames();
     }
   }, [wallet.userId]);
@@ -50,6 +82,11 @@ export default function PlayPage() {
     }
   }, [createdSessions, wallet.userId]);
 
+  // Initialize moves array when rounds change
+  useEffect(() => {
+    setSelectedMoves(new Array(selectedRounds).fill('R'));
+  }, [selectedRounds]);
+
   const loadPersistentGames = () => {
     if (!wallet.userId) return;
     
@@ -60,9 +97,21 @@ export default function PlayPage() {
         // Filter out locally deleted games
         const activeGames = games.filter((game: SessionCard) => !game.isLocallyDeleted);
         setCreatedSessions(activeGames);
+        console.log(`Loaded ${activeGames.length} persistent games for ${wallet.displayName}`);
       }
     } catch (error) {
       console.error('Failed to load persistent games:', error);
+    }
+  };
+
+  const savePersistentGames = (games: SessionCard[]) => {
+    if (!wallet.userId) return;
+    
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(games));
+      console.log(`Saved ${games.length} games to localStorage`);
+    } catch (error) {
+      console.error('Failed to save persistent games:', error);
     }
   };
 
@@ -72,6 +121,7 @@ export default function PlayPage() {
     try {
       // Check each session's current status
       const updatedSessions = [];
+      let hasChanges = false;
       
       for (const session of createdSessions) {
         try {
@@ -81,19 +131,34 @@ export default function PlayPage() {
             
             // If session is resolved, don't include it
             if (sessionData.status !== 'RESOLVED') {
-              updatedSessions.push({ ...session, status: sessionData.status });
+              const updatedSession = { ...session, status: sessionData.status };
+              updatedSessions.push(updatedSession);
+              
+              // Check if status changed
+              if (session.status !== sessionData.status) {
+                hasChanges = true;
+              }
+            } else {
+              hasChanges = true; // Game was resolved, remove from list
+              console.log(`Session ${session.id} resolved, removing from list`);
             }
+          } else {
+            // Session doesn't exist anymore, remove it
+            hasChanges = true;
+            console.log(`Session ${session.id} no longer exists, removing`);
           }
         } catch (error) {
-          // If session doesn't exist anymore, remove it
-          continue;
+          // If session check fails, remove it from the list
+          hasChanges = true;
+          console.log(`Session ${session.id} check failed, removing`);
         }
       }
 
       // Only update if there's a change
-      if (updatedSessions.length !== createdSessions.length) {
+      if (hasChanges) {
         setCreatedSessions(updatedSessions);
         savePersistentGames(updatedSessions);
+        console.log(`Updated sessions: ${createdSessions.length} -> ${updatedSessions.length}`);
       }
       
     } catch (error) {
@@ -104,6 +169,8 @@ export default function PlayPage() {
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
     try {
+      console.log('Manual refresh started...');
+      
       // Check for resolved games
       await checkForResolvedGames();
       
@@ -113,8 +180,11 @@ export default function PlayPage() {
         if (userResponse.ok) {
           const userData = await userResponse.json();
           wallet.setBalance(userData.balance);
+          console.log(`Refreshed balance: ${userData.balance}`);
         }
       }
+      
+      console.log('Manual refresh completed');
     } catch (error) {
       console.error('Failed to refresh:', error);
     } finally {
@@ -122,19 +192,14 @@ export default function PlayPage() {
     }
   };
 
-  const savePersistentGames = (games: SessionCard[]) => {
-    if (!wallet.userId) return;
-    
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(games));
-    } catch (error) {
-      console.error('Failed to save persistent games:', error);
-    }
-  };
-
   const getMoveEmoji = (move: Move) => {
     const emojis = { R: '🪨', P: '📄', S: '✂️' };
     return emojis[move];
+  };
+
+  const getMoveLabel = (move: Move) => {
+    const labels = { R: 'Rock', P: 'Paper', S: 'Scissors' };
+    return labels[move];
   };
 
   const selectMove = (roundIndex: number, move: Move) => {
@@ -176,23 +241,33 @@ export default function PlayPage() {
       const moveString = selectedMoves.join('');
       const commitHash = await simpleHash(moveString + salt);
       
+      console.log(`Creating game with moves: ${selectedMoves.join(',')} and salt: ${salt}`);
+      
       const requestBody = {
         rounds: selectedRounds,
         stakePerRound: selectedStake,
         commitHash: commitHash,
         isPrivate,
-        // For instant resolution: include moves and salt
+        // CRUCIAL: Send Alice's actual moves and salt to be stored
         moves: selectedMoves,
-        salt: salt
+        salt: salt,
+        userId: wallet.userId // Explicit user ID for API detection
       };
+
+      console.log('Create game request:', requestBody);
 
       const response = await fetch('/api/session/create', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-User-ID': wallet.userId || '',
+          'X-User-Name': wallet.displayName || ''
+        },
         body: JSON.stringify(requestBody),
       });
 
       const responseText = await response.text();
+      console.log('Create game raw response:', responseText);
 
       if (!response.ok) {
         let errorMessage = 'Failed to create game';
@@ -206,17 +281,19 @@ export default function PlayPage() {
       }
 
       const data = JSON.parse(responseText);
+      console.log('Create game parsed response:', data);
       
-      // Store moves and salt in localStorage for later reveal
+      // Store moves and salt in localStorage for later reveal (Phase 2 compatibility)
       if (typeof window !== 'undefined') {
-        localStorage.setItem(`solrps_moves_${data.id}`, JSON.stringify(selectedMoves));
-        localStorage.setItem(`solrps_salt_${data.id}`, salt);
+        localStorage.setItem(`solrps_moves_${data.sessionId}`, JSON.stringify(selectedMoves));
+        localStorage.setItem(`solrps_salt_${data.sessionId}`, salt);
+        console.log(`Stored moves and salt for session ${data.sessionId}`);
       }
       
       // Create new session and persist it
       const newSession: SessionCard = {
-        id: data.id,
-        creator: wallet.userId!,
+        id: data.sessionId,
+        creator: wallet.displayName || wallet.userId || 'You',
         rounds: selectedRounds,
         stakePerRound: selectedStake,
         totalStake: selectedRounds * selectedStake,
@@ -225,12 +302,12 @@ export default function PlayPage() {
         isLocallyDeleted: false,
       };
       
-      const updatedSessions = [...createdSessions, newSession];
+      const updatedSessions = [newSession, ...createdSessions];
       setCreatedSessions(updatedSessions);
       savePersistentGames(updatedSessions);
 
-      // Reset form
-      setSelectedMoves([]);
+      // Reset form to defaults
+      setSelectedMoves(new Array(selectedRounds).fill('R'));
       
       // Refresh wallet balance
       try {
@@ -238,6 +315,7 @@ export default function PlayPage() {
         if (userResponse.ok) {
           const userData = await userResponse.json();
           wallet.setBalance(userData.balance);
+          console.log(`Balance updated after game creation: ${userData.balance}`);
         }
       } catch (e) {
         console.warn('Failed to refresh balance:', e);
@@ -245,6 +323,8 @@ export default function PlayPage() {
       
       // Show success dialog
       setShowSuccessDialog(true);
+      
+      console.log(`Game created successfully: ${data.sessionId}`);
       
     } catch (error: any) {
       console.error('Failed to create game:', error);
@@ -277,27 +357,28 @@ export default function PlayPage() {
         throw new Error(errorData.error || 'Failed to delete game');
       }
 
+      console.log(`Successfully cancelled session ${sessionToDelete}`);
+
       // Mark as locally deleted and persist
-      const updatedSessions = createdSessions.map(session => 
-        session.id === sessionToDelete 
-          ? { ...session, isLocallyDeleted: true }
-          : session
-      ).filter(session => !session.isLocallyDeleted); // Remove from display
+      const updatedSessions = createdSessions
+        .filter(session => session.id !== sessionToDelete); // Remove from display
       
       setCreatedSessions(updatedSessions);
       savePersistentGames([
         ...updatedSessions,
+        // Keep record of deleted session in localStorage for tracking
         ...createdSessions
           .filter(s => s.id === sessionToDelete)
           .map(s => ({ ...s, isLocallyDeleted: true }))
       ]);
       
-      // Refresh wallet balance
+      // Refresh wallet balance (user gets refund)
       try {
         const userResponse = await fetch(`/api/user/${wallet.userId}`);
         if (userResponse.ok) {
           const userData = await userResponse.json();
           wallet.setBalance(userData.balance);
+          console.log(`Balance updated after deletion: ${userData.balance}`);
         }
       } catch (e) {
         console.warn('Failed to refresh balance:', e);
@@ -325,6 +406,7 @@ export default function PlayPage() {
       if (navigator.clipboard) {
         await navigator.clipboard.writeText(text);
       } else {
+        // Fallback for older browsers
         const textArea = document.createElement('textarea');
         textArea.value = text;
         document.body.appendChild(textArea);
@@ -342,171 +424,174 @@ export default function PlayPage() {
   // Show loading if wallet not connected
   if (!wallet.userId) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[400px] gap-6">
+      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
         <div className="text-center">
-          <h2 className="text-2xl font-bold mb-2">Loading...</h2>
-          <p className="text-gray-400">Connecting to wallet...</p>
+          <div className="text-2xl mb-2">⚡</div>
+          <div className="text-lg">Loading wallet...</div>
+          <div className="text-sm text-gray-400 mt-2">Connecting as user...</div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="max-w-4xl mx-auto p-6 space-y-6">
+    <div className="max-w-4xl mx-auto p-6 space-y-6 min-h-screen bg-slate-900 text-white">
+      {/* Header */}
       <div className="text-center">
-        <h1 className="text-3xl font-bold mb-2">Create Game</h1>
+        <h1 className="text-3xl font-bold mb-2">🎮 Create Game</h1>
         <p className="text-gray-400">Set up your Rock Paper Scissors challenge</p>
+        <div className="mt-4 bg-slate-800 rounded-lg px-6 py-3 inline-block">
+          <div className="text-sm text-gray-400 mb-1">Playing as</div>
+          <div className="text-lg font-medium text-blue-400">
+            {wallet.displayName || 'Unknown'}
+          </div>
+          <div className="text-sm">
+            <span className="text-gray-400">Balance: </span>
+            <span className="text-green-400 font-mono">
+              {(wallet.balance || 0).toLocaleString()} tokens
+            </span>
+          </div>
+        </div>
       </div>
 
       {/* Phase 2 Mode Indicator */}
       <div className="bg-slate-800 border border-white/10 rounded-lg p-4 mb-6">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-semibold">🔧 Mock Mode</h3>
+            <h3 className="text-lg font-semibold">🔧 Phase 1 - Mock Mode</h3>
             <p className="text-gray-400 text-sm">
-              Games use mock escrow. No real transactions.
+              Games use mock escrow. No real transactions. Alice's actual moves now used!
             </p>
           </div>
-          
-          <div className="flex gap-2">
-            <span className="text-xs px-2 py-1 rounded bg-yellow-600 text-black">
+          <div className="flex gap-1">
+            <span className="text-xs bg-yellow-600 text-black px-2 py-1 rounded">
               MOCK
             </span>
             <span className="text-xs bg-purple-600 text-white px-2 py-1 rounded">
-              PHASE 2
+              PHASE 2 READY
             </span>
           </div>
         </div>
       </div>
 
-      <div className="grid md:grid-cols-2 gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Game Creation Form */}
-        <div className="bg-slate-800 rounded-xl p-6 space-y-6">
-          <h2 className="text-xl font-semibold">Game Settings</h2>
-          
-          {/* Current Balance */}
-          <div className="bg-blue-900/20 border border-blue-500/30 rounded-lg p-3">
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-blue-300">Your Balance:</span>
-              <span className="font-mono text-blue-200">
-                {(wallet.balance || 0).toLocaleString()} RPS
-              </span>
-            </div>
-          </div>
-          
+        <div className="bg-slate-800 rounded-xl p-6">
+          <h2 className="text-xl font-semibold mb-6">Create New Game</h2>
+
           {/* Rounds Selection */}
-          <div>
-            <label className="block text-sm font-medium mb-3">Rounds</label>
-            <div className="grid grid-cols-3 gap-2">
+          <div className="mb-6">
+            <label className="block text-sm font-medium mb-3">Number of Rounds</label>
+            <div className="grid grid-cols-3 gap-3">
               {([1, 3, 5] as const).map((rounds) => (
                 <button
                   key={rounds}
                   onClick={() => setSelectedRounds(rounds)}
-                  className={`p-3 rounded-lg border transition-all ${
+                  className={`p-3 rounded-lg border-2 transition-colors text-center ${
                     selectedRounds === rounds
-                      ? 'border-blue-500 bg-blue-500/20 text-white'
-                      : 'border-white/20 bg-white/5 text-gray-300 hover:border-white/40'
+                      ? 'bg-blue-600 text-white border-blue-400'
+                      : 'bg-white/5 border-white/10 hover:bg-white/10'
                   }`}
                 >
-                  {rounds} Round{rounds > 1 ? 's' : ''}
+                  <div className="font-semibold">{rounds}</div>
+                  <div className="text-xs opacity-75">Round{rounds > 1 ? 's' : ''}</div>
                 </button>
               ))}
             </div>
           </div>
 
           {/* Stake Selection */}
-          <div>
+          <div className="mb-6">
             <label className="block text-sm font-medium mb-3">Stake per Round</label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-3 gap-3">
               {([100, 500, 1000] as const).map((stake) => (
                 <button
                   key={stake}
                   onClick={() => setSelectedStake(stake)}
-                  className={`p-3 rounded-lg border transition-all ${
+                  className={`p-3 rounded-lg border-2 transition-colors text-center ${
                     selectedStake === stake
-                      ? 'border-blue-500 bg-blue-500/20 text-white'
-                      : 'border-white/20 bg-white/5 text-gray-300 hover:border-white/40'
+                      ? 'bg-purple-600 text-white border-purple-400'
+                      : 'bg-white/5 border-white/10 hover:bg-white/10'
                   }`}
                 >
-                  {stake.toLocaleString()} RPS
+                  <div className="font-semibold">{stake}</div>
+                  <div className="text-xs opacity-75">Tokens</div>
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Privacy Setting */}
-          <div>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={isPrivate}
-                onChange={(e) => setIsPrivate(e.target.checked)}
-                className="rounded"
-              />
-              <span className="text-sm">Private game (invite only)</span>
-            </label>
-          </div>
-
           {/* Move Selection */}
-          <div>
-            <label className="block text-sm font-medium mb-3">
-              Your Moves ({selectedMoves.filter(Boolean).length}/{selectedRounds})
-            </label>
-            
-            <div className="space-y-3">
-              {Array.from({ length: selectedRounds }, (_, roundIndex) => (
-                <div key={roundIndex} className="bg-white/5 rounded-lg p-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium">Round {roundIndex + 1}:</span>
-                    
-                    <div className="flex gap-2">
-                      {(['R', 'P', 'S'] as Move[]).map((move) => {
-                        const isSelected = selectedMoves[roundIndex] === move;
-                        
-                        return (
-                          <button
-                            key={move}
-                            onClick={() => selectMove(roundIndex, move)}
-                            disabled={isCreating}
-                            className={`w-12 h-12 rounded-lg border transition-all ${
-                              isSelected 
-                                ? 'border-blue-500 bg-blue-500/20 text-white scale-110' 
-                                : 'border-white/20 bg-white/5 text-gray-300 hover:border-white/40 hover:scale-105'
-                            } ${isCreating ? 'opacity-50 cursor-not-allowed' : ''}`}
-                          >
-                            <span className="text-lg">{getMoveEmoji(move)}</span>
-                          </button>
-                        );
-                      })}
+          <div className="mb-6">
+            <label className="block text-sm font-medium mb-3">Your Moves (These will be used in the game!)</label>
+            <div className="space-y-4">
+              {Array.from({ length: selectedRounds }, (_, index) => (
+                <div key={index} className="bg-white/5 rounded-lg p-4">
+                  <div className="text-sm text-gray-400 mb-3">Round {index + 1}</div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['R', 'P', 'S'] as Move[]).map((move) => (
+                      <button
+                        key={move}
+                        onClick={() => selectMove(index, move)}
+                        className={`p-3 rounded-lg border-2 transition-colors text-center ${
+                          selectedMoves[index] === move
+                            ? 'bg-green-600 text-white border-green-400'
+                            : 'bg-white/10 hover:bg-white/20 border-transparent'
+                        }`}
+                      >
+                        <div className="text-xl mb-1">{getMoveEmoji(move)}</div>
+                        <div className="text-xs">{getMoveLabel(move)}</div>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="text-center mt-3">
+                    <div className="text-2xl">
+                      {selectedMoves[index] ? getMoveEmoji(selectedMoves[index]) : '❓'}
                     </div>
-                    
-                    <span className="text-xs text-gray-400 min-w-[60px] text-right">
-                      {selectedMoves[roundIndex] ? getMoveEmoji(selectedMoves[roundIndex]) : '?'}
-                    </span>
+                    <div className="text-xs text-gray-400 mt-1">
+                      {selectedMoves[index] ? getMoveLabel(selectedMoves[index]) : 'Choose your move'}
+                    </div>
                   </div>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Game Summary */}
-          <div className="bg-white/5 rounded-lg p-4">
-            <div className="text-sm space-y-1">
+          {/* Game Settings */}
+          <div className="mb-6">
+            <label className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                checked={isPrivate}
+                onChange={(e) => setIsPrivate(e.target.checked)}
+                className="w-4 h-4 text-blue-600 rounded"
+              />
+              <span className="text-sm">Private Game (invite only)</span>
+            </label>
+          </div>
+
+          {/* Cost Summary */}
+          <div className="bg-white/5 rounded-lg p-4 mb-6">
+            <div className="text-sm space-y-2">
               <div className="flex justify-between">
-                <span>Total Stake:</span>
-                <span className="font-mono">{(selectedRounds * selectedStake).toLocaleString()} RPS</span>
+                <span>Rounds:</span>
+                <span>{selectedRounds}</span>
               </div>
               <div className="flex justify-between">
-                <span>Potential Pot:</span>
-                <span className="font-mono">{(selectedRounds * selectedStake * 2).toLocaleString()} RPS</span>
+                <span>Stake per Round:</span>
+                <span>{selectedStake} tokens</span>
               </div>
-              <div className="flex justify-between">
-                <span>Fees (5%):</span>
-                <span className="font-mono">{Math.floor(selectedRounds * selectedStake * 2 * 0.05).toLocaleString()} RPS</span>
+              <div className="flex justify-between font-semibold text-yellow-400">
+                <span>Total Cost:</span>
+                <span>{selectedRounds * selectedStake} tokens</span>
               </div>
               <div className="flex justify-between text-green-400">
-                <span>Winner Gets:</span>
-                <span className="font-mono">{Math.floor(selectedRounds * selectedStake * 2 * 0.95).toLocaleString()} RPS</span>
+                <span>Potential Win:</span>
+                <span>{Math.floor((selectedRounds * selectedStake * 2) * 0.95)} tokens</span>
+              </div>
+              <div className="flex justify-between text-gray-400 text-xs">
+                <span>Fees (on wins only):</span>
+                <span>5% of pot</span>
               </div>
             </div>
           </div>
@@ -515,7 +600,7 @@ export default function PlayPage() {
           <button
             onClick={handleCreateGame}
             disabled={!canCreateGame || isCreating}
-            className={`w-full py-3 rounded-lg font-medium transition-all ${
+            className={`w-full py-3 rounded-lg font-medium transition-colors ${
               canCreateGame && !isCreating
                 ? 'bg-blue-600 hover:bg-blue-700 text-white'
                 : 'bg-gray-600 text-gray-400 cursor-not-allowed'
@@ -526,69 +611,85 @@ export default function PlayPage() {
 
           {/* Error Messages */}
           {!canCreateGame && (
-            <p className="text-red-400 text-sm text-center">
-              {selectedMoves.filter(Boolean).length !== selectedRounds 
-                ? 'Please select all moves'
-                : 'Insufficient balance'
-              }
-            </p>
+            <div className="text-center mt-3">
+              {selectedMoves.filter(Boolean).length !== selectedRounds ? (
+                <p className="text-yellow-400 text-sm">Please select moves for all rounds</p>
+              ) : (
+                <p className="text-red-400 text-sm">Insufficient balance</p>
+              )}
+            </div>
           )}
         </div>
 
-        {/* Created Sessions */}
+        {/* Your Games */}
         <div className="bg-slate-800 rounded-xl p-6">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xl font-semibold">Your Games</h2>
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-semibold">Your Games ({createdSessions.length})</h2>
             <button
               onClick={handleManualRefresh}
               disabled={isRefreshing}
-              className={`px-3 py-1 text-xs rounded transition-colors ${
+              className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
                 isRefreshing
                   ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
                   : 'bg-blue-600 hover:bg-blue-700 text-white'
               }`}
             >
-              {isRefreshing ? '⟳ Refreshing...' : '🔄 Refresh'}
+              {isRefreshing ? '⟳' : '🔄'} 
+              {isRefreshing ? 'Loading...' : 'Refresh'}
             </button>
           </div>
-          
+
           {createdSessions.length === 0 ? (
-            <p className="text-gray-400 text-center py-8">
-              No active games
-            </p>
+            <div className="text-center py-8 text-gray-400">
+              <div className="text-2xl mb-2">🎮</div>
+              <div>No active games</div>
+              <div className="text-sm mt-1">Create your first game to get started!</div>
+            </div>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-4">
               {createdSessions.map((session) => (
                 <div key={session.id} className="bg-white/5 rounded-lg p-4">
                   <div className="flex justify-between items-start mb-3">
                     <div>
                       <div className="font-medium">
-                        {session.rounds} Rounds • {session.stakePerRound.toLocaleString()} RPS
+                        {session.rounds} rounds @ {session.stakePerRound} each
                       </div>
-                      <div className="text-xs text-gray-400">
-                        ID: {session.id.slice(0, 8)}...{session.id.slice(-8)}
+                      <div className="text-sm text-gray-400">
+                        Total: {session.totalStake} tokens
                       </div>
                     </div>
-                    
-                    <span className="text-xs bg-yellow-600 text-black px-2 py-1 rounded">
-                      AVAILABLE
-                    </span>
+                    <div className="text-right">
+                      <div className="text-sm text-gray-400">Status</div>
+                      <div className={`px-2 py-1 rounded text-xs ${
+                        session.status === 'OPEN' ? 'bg-yellow-600 text-yellow-100' :
+                        session.status === 'AWAITING_REVEAL' ? 'bg-orange-600 text-orange-100' :
+                        'bg-green-600 text-green-100'
+                      }`}>
+                        {session.status === 'OPEN' ? 'WAITING' : 
+                         session.status === 'AWAITING_REVEAL' ? 'JOINED' : 
+                         session.status}
+                      </div>
+                    </div>
                   </div>
-
+                  
                   <div className="flex gap-2">
                     <button
                       onClick={() => copyToClipboard(session.id)}
-                      className="px-2 py-1 text-xs bg-blue-600 hover:bg-blue-700 rounded transition-colors"
+                      className="flex-1 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm transition-colors"
                     >
-                      Copy ID
+                      📋 Copy Session ID
                     </button>
                     <button
                       onClick={() => handleDeleteRequest(session.id)}
                       disabled={deletingSessionId === session.id}
-                      className="px-2 py-1 text-xs bg-red-600 hover:bg-red-700 disabled:bg-red-800 disabled:cursor-not-allowed rounded transition-colors"
+                      className="px-3 py-2 bg-red-600 hover:bg-red-700 disabled:bg-red-800 disabled:cursor-not-allowed text-white rounded text-sm transition-colors"
                     >
-                      {deletingSessionId === session.id ? 'Deleting...' : 'Delete'}
+                      {deletingSessionId === session.id ? '⟳' : '🗑️'}
                     </button>
+                  </div>
+                  
+                  <div className="text-xs text-gray-500 mt-2 font-mono">
+                    {session.id.slice(0, 12)}...{session.id.slice(-8)}
                   </div>
                 </div>
               ))}
@@ -599,45 +700,49 @@ export default function PlayPage() {
 
       {/* Success Dialog */}
       {showSuccessDialog && (
-        <div 
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-          onClick={() => setShowSuccessDialog(false)}
-        >
-          <div className="bg-slate-800 rounded-xl p-8 max-w-sm w-full text-center">
-            <div className="text-4xl mb-4">🎉</div>
-            <h3 className="text-xl font-bold text-green-400 mb-2">Game Created Successfully!</h3>
-            <p className="text-gray-400 text-sm">Your game is now available in the lobby.</p>
-            <div className="mt-4 text-xs text-gray-500">Click anywhere to continue</div>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800 rounded-xl p-6 max-w-md w-full">
+            <div className="text-center">
+              <div className="text-4xl mb-4">🎉</div>
+              <h3 className="text-xl font-bold mb-2">Game Created!</h3>
+              <p className="text-gray-400 mb-6">
+                Your game is now live and ready for challengers to join. Your selected moves will be used in the actual game!
+              </p>
+              <button
+                onClick={() => setShowSuccessDialog(false)}
+                className="w-full py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium transition-colors"
+              >
+                Continue
+              </button>
+            </div>
           </div>
         </div>
       )}
 
       {/* Delete Confirmation Dialog */}
       {showDeleteDialog && (
-        <div 
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-          onClick={handleCancelDelete}
-        >
-          <div 
-            className="bg-slate-800 rounded-xl p-8 max-w-sm w-full text-center"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="text-4xl mb-4">🗑️</div>
-            <h3 className="text-xl font-bold text-yellow-400 mb-2">Delete Game?</h3>
-            <p className="text-gray-400 text-sm mb-6">You'll get a refund minus 5% fees.</p>
-            <div className="flex gap-3">
-              <button
-                onClick={handleCancelDelete}
-                className="flex-1 py-2 bg-gray-600 hover:bg-gray-700 rounded-lg text-sm font-medium transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmDelete}
-                className="flex-1 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm font-medium transition-colors"
-              >
-                Delete
-              </button>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800 rounded-xl p-6 max-w-md w-full">
+            <div className="text-center">
+              <div className="text-4xl mb-4">⚠️</div>
+              <h3 className="text-xl font-bold mb-2">Delete Game?</h3>
+              <p className="text-gray-400 mb-6">
+                This will cancel the game and refund your stake. This action cannot be undone.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={handleCancelDelete}
+                  className="flex-1 py-3 bg-gray-600 hover:bg-gray-700 rounded-lg font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmDelete}
+                  className="flex-1 py-3 bg-red-600 hover:bg-red-700 rounded-lg font-medium transition-colors"
+                >
+                  Delete Game
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -645,15 +750,21 @@ export default function PlayPage() {
 
       {/* Delete Success Dialog */}
       {showDeleteSuccessDialog && (
-        <div 
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-          onClick={() => setShowDeleteSuccessDialog(false)}
-        >
-          <div className="bg-slate-800 rounded-xl p-8 max-w-sm w-full text-center">
-            <div className="text-4xl mb-4">✅</div>
-            <h3 className="text-xl font-bold text-green-400 mb-2">Game Deleted Successfully!</h3>
-            <p className="text-gray-400 text-sm">Your refund has been processed.</p>
-            <div className="mt-4 text-xs text-gray-500">Click anywhere to continue</div>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800 rounded-xl p-6 max-w-md w-full">
+            <div className="text-center">
+              <div className="text-4xl mb-4">✅</div>
+              <h3 className="text-xl font-bold mb-2">Game Deleted!</h3>
+              <p className="text-gray-400 mb-6">
+                Your game has been cancelled and your stake has been refunded.
+              </p>
+              <button
+                onClick={() => setShowDeleteSuccessDialog(false)}
+                className="w-full py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium transition-colors"
+              >
+                Continue
+              </button>
+            </div>
           </div>
         </div>
       )}
