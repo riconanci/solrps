@@ -1,4 +1,4 @@
-// app/lobby/page.tsx - COMPLETE REWRITE WITH ZUSTAND WALLET
+// app/lobby/page.tsx - Complete Enhanced Lobby with Filters and Manual Join
 "use client";
 import { useState, useEffect } from "react";
 import { useWallet } from "../../src/state/wallet";
@@ -34,19 +34,36 @@ interface GameResult {
   message: string;
 }
 
+interface Filters {
+  rounds: 'any' | 1 | 3 | 5;
+  stake: 'any' | 100 | 500 | 1000;
+}
+
 export default function LobbyPage() {
   const wallet = useWallet();
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [filteredSessions, setFilteredSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [gameResult, setGameResult] = useState<GameResult | null>(null);
+  
+  // Filter states
+  const [showFilters, setShowFilters] = useState(false);
+  const [filters, setFilters] = useState<Filters>({
+    rounds: 'any',
+    stake: 'any'
+  });
+
+  // Manual join states
+  const [showManualJoin, setShowManualJoin] = useState(false);
+  const [manualSessionId, setManualSessionId] = useState('');
+  const [manualJoinLoading, setManualJoinLoading] = useState(false);
 
   // Initialize wallet on mount
   useEffect(() => {
     const initializeWallet = async () => {
       if (!wallet.isConnected) {
-        // Determine user from URL parameter
         const urlParams = new URLSearchParams(window.location.search);
         const userParam = urlParams.get('user') || 'alice';
         const userId = userParam === 'alice' ? 'seed_alice' : 'seed_bob';
@@ -69,6 +86,11 @@ export default function LobbyPage() {
       loadSessions();
     }
   }, [wallet.isConnected]);
+
+  // Apply filters when sessions or filters change
+  useEffect(() => {
+    applyFilters();
+  }, [sessions, filters]);
 
   const loadSessions = async () => {
     if (!wallet.isConnected) return;
@@ -104,6 +126,99 @@ export default function LobbyPage() {
       setSessions([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const applyFilters = () => {
+    let filtered = [...sessions];
+
+    // Filter by rounds
+    if (filters.rounds !== 'any') {
+      filtered = filtered.filter(session => session.rounds === filters.rounds);
+    }
+
+    // Filter by stake per round
+    if (filters.stake !== 'any') {
+      filtered = filtered.filter(session => session.stakePerRound === filters.stake);
+    }
+
+    setFilteredSessions(filtered);
+  };
+
+  const handleFilterChange = (type: keyof Filters, value: any) => {
+    setFilters(prev => ({
+      ...prev,
+      [type]: value
+    }));
+  };
+
+  const clearFilters = () => {
+    setFilters({
+      rounds: 'any',
+      stake: 'any'
+    });
+  };
+
+  const getActiveFilterCount = () => {
+    let count = 0;
+    if (filters.rounds !== 'any') count++;
+    if (filters.stake !== 'any') count++;
+    return count;
+  };
+
+  const handleManualJoin = async () => {
+    if (!manualSessionId.trim()) {
+      alert('Please enter a session ID');
+      return;
+    }
+
+    setManualJoinLoading(true);
+
+    try {
+      // First fetch the session details to validate it exists
+      const response = await fetch(`/api/session/${manualSessionId.trim()}`);
+      
+      if (!response.ok) {
+        throw new Error('Session not found or invalid');
+      }
+
+      const sessionData = await response.json();
+      
+      if (!sessionData.success) {
+        throw new Error(sessionData.error || 'Failed to fetch session');
+      }
+
+      const session = sessionData.session;
+
+      // Check if user can afford it
+      const balance = wallet.balance || 0;
+      if (balance < session.totalStake) {
+        alert(`Insufficient balance! You need ${session.totalStake.toLocaleString()} tokens but only have ${balance.toLocaleString()}.`);
+        return;
+      }
+
+      // Check if it's their own session
+      if (session.creatorId === wallet.userId) {
+        alert('You cannot join your own game!');
+        return;
+      }
+
+      // Check if session is still open
+      if (session.status !== 'OPEN') {
+        alert('This game is no longer available to join');
+        return;
+      }
+
+      // If all checks pass, open the join modal
+      setSelectedSession(session);
+      setShowManualJoin(false);
+      setManualSessionId('');
+
+    } catch (error: any) {
+      console.error('Manual join error:', error);
+      alert(error.message || 'Failed to join game. Please check the session ID.');
+    } finally {
+      setManualJoinLoading(false);
     }
   };
 
@@ -185,19 +300,175 @@ export default function LobbyPage() {
 
         {/* Games Section */}
         <div className="bg-slate-800 rounded-xl p-6">
-          <div className="flex justify-between items-center mb-6">
+          {/* Header with Controls */}
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
             <h2 className="text-xl font-semibold">
-              Available Games ({sessions.length})
+              Available Games ({filteredSessions.length})
+              {filteredSessions.length !== sessions.length && (
+                <span className="text-gray-400 text-base ml-2">
+                  of {sessions.length} total
+                </span>
+              )}
             </h2>
-            <button
-              onClick={loadSessions}
-              disabled={loading}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center gap-2"
-            >
-              {loading ? '⟳' : '🔄'} 
-              {loading ? 'Loading...' : 'Refresh'}
-            </button>
+            
+            <div className="flex flex-wrap gap-3">
+              {/* Manual Join Button */}
+              <button
+                onClick={() => setShowManualJoin(!showManualJoin)}
+                className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors flex items-center gap-2"
+              >
+                🔑 Join by ID
+              </button>
+
+              {/* Filter Button */}
+              <button
+                onClick={() => setShowFilters(!showFilters)}
+                className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
+                  showFilters || getActiveFilterCount() > 0
+                    ? 'bg-purple-600 hover:bg-purple-700 text-white'
+                    : 'bg-gray-600 hover:bg-gray-700 text-gray-200'
+                }`}
+              >
+                🔍 Filters
+                {getActiveFilterCount() > 0 && (
+                  <span className="bg-purple-400 text-purple-900 px-2 py-1 rounded-full text-xs font-bold">
+                    {getActiveFilterCount()}
+                  </span>
+                )}
+              </button>
+
+              {/* Refresh Button */}
+              <button
+                onClick={loadSessions}
+                disabled={loading}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center gap-2"
+              >
+                {loading ? '⟳' : '🔄'} 
+                {loading ? 'Loading...' : 'Refresh'}
+              </button>
+            </div>
           </div>
+
+          {/* Manual Join Panel */}
+          {showManualJoin && (
+            <div className="bg-slate-700 rounded-lg p-4 mb-6 border border-slate-600">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium">Join by Session ID</h3>
+                <button
+                  onClick={() => {
+                    setShowManualJoin(false);
+                    setManualSessionId('');
+                  }}
+                  className="text-gray-400 hover:text-white"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-2">
+                    Enter Session ID (from private game invite)
+                  </label>
+                  <input
+                    type="text"
+                    value={manualSessionId}
+                    onChange={(e) => setManualSessionId(e.target.value)}
+                    placeholder="e.g., clxyz123abc..."
+                    className="w-full px-3 py-2 bg-slate-600 border border-slate-500 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        handleManualJoin();
+                      }
+                    }}
+                  />
+                </div>
+
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => {
+                      setShowManualJoin(false);
+                      setManualSessionId('');
+                    }}
+                    disabled={manualJoinLoading}
+                    className="flex-1 py-2 bg-gray-600 hover:bg-gray-700 disabled:opacity-50 text-white rounded-lg transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleManualJoin}
+                    disabled={manualJoinLoading || !manualSessionId.trim()}
+                    className="flex-1 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+                  >
+                    {manualJoinLoading ? 'Checking...' : 'Join Game'}
+                  </button>
+                </div>
+
+                <div className="text-xs text-gray-400">
+                  💡 Tip: Session IDs are shared by game creators for private invites
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Filter Panel */}
+          {showFilters && (
+            <div className="bg-slate-700 rounded-lg p-4 mb-6 border border-slate-600">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium">Filters</h3>
+                {getActiveFilterCount() > 0 && (
+                  <button
+                    onClick={clearFilters}
+                    className="text-sm text-gray-400 hover:text-white"
+                  >
+                    Clear All
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Rounds Filter */}
+                <div>
+                  <label className="block text-sm font-medium mb-2">Number of Rounds</label>
+                  <div className="grid grid-cols-4 gap-2">
+                    {['any', 1, 3, 5].map((option) => (
+                      <button
+                        key={option}
+                        onClick={() => handleFilterChange('rounds', option)}
+                        className={`py-2 px-3 rounded-lg text-sm transition-colors ${
+                          filters.rounds === option
+                            ? 'bg-purple-600 text-white'
+                            : 'bg-slate-600 hover:bg-slate-500 text-gray-200'
+                        }`}
+                      >
+                        {option === 'any' ? 'Any' : `${option} Round${option === 1 ? '' : 's'}`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Stake Filter */}
+                <div>
+                  <label className="block text-sm font-medium mb-2">Stake per Round</label>
+                  <div className="grid grid-cols-4 gap-2">
+                    {['any', 100, 500, 1000].map((option) => (
+                      <button
+                        key={option}
+                        onClick={() => handleFilterChange('stake', option)}
+                        className={`py-2 px-3 rounded-lg text-sm transition-colors ${
+                          filters.stake === option
+                            ? 'bg-purple-600 text-white'
+                            : 'bg-slate-600 hover:bg-slate-500 text-gray-200'
+                        }`}
+                      >
+                        {option === 'any' ? 'Any' : `${option}`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Games List */}
           {loading ? (
@@ -205,15 +476,30 @@ export default function LobbyPage() {
               <div className="text-2xl mb-4">⚡</div>
               <div className="text-lg">Loading available games...</div>
             </div>
-          ) : sessions.length === 0 ? (
+          ) : filteredSessions.length === 0 ? (
             <div className="text-center py-16 text-gray-400">
               <div className="text-2xl mb-4">🎮</div>
-              <div className="text-lg mb-2">No games available to join</div>
-              <div className="text-sm">Create a game to get started!</div>
+              {sessions.length === 0 ? (
+                <>
+                  <div className="text-lg mb-2">No games available to join</div>
+                  <div className="text-sm">Create a game to get started!</div>
+                </>
+              ) : (
+                <>
+                  <div className="text-lg mb-2">No games match your filters</div>
+                  <div className="text-sm">Try adjusting your filter settings</div>
+                  <button
+                    onClick={clearFilters}
+                    className="mt-3 px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg text-sm"
+                  >
+                    Clear Filters
+                  </button>
+                </>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {sessions.map((session) => (
+              {filteredSessions.map((session) => (
                 <SessionCard 
                   key={session.id}
                   session={session}
@@ -304,13 +590,21 @@ function SessionCard({
       <button
         onClick={onJoin}
         disabled={!canAfford}
-        className={`w-full py-3 rounded-lg font-medium transition-colors ${
+        className={`w-full py-3 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 ${
           canAfford
-            ? 'bg-blue-600 hover:bg-blue-700 text-white'
+            ? 'bg-blue-600 hover:bg-blue-700 text-white hover:scale-105'
             : 'bg-red-600/50 text-red-300 cursor-not-allowed'
         }`}
       >
-        {canAfford ? 'Join Game' : 'Insufficient Balance'}
+        {canAfford ? (
+          <>
+            🎮 Join Game
+          </>
+        ) : (
+          <>
+            💸 Insufficient Balance
+          </>
+        )}
       </button>
     </div>
   );
@@ -574,45 +868,51 @@ function GameResultModal({
           <div className={`text-xl font-mono ${getResultColor()}`}>
             {result.balanceChange >= 0 ? '+' : ''}{result.balanceChange.toLocaleString()} tokens
           </div>
-          <div className="text-sm text-gray-400 mt-2">
-            New Balance: {result.newBalance.toLocaleString()} tokens
+        </div>
+
+        {/* Game Details */}
+        <div className="bg-white/5 rounded-lg p-4 mb-6">
+          <div className="text-sm space-y-2">
+            <div className="flex justify-between">
+              <span>Your Score:</span>
+              <span>{result.matchResult.challengerWins} wins</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Opponent Score:</span>
+              <span>{result.matchResult.creatorWins} wins</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Draws:</span>
+              <span>{result.matchResult.draws}</span>
+            </div>
+            <div className="flex justify-between font-medium">
+              <span>Total Pot:</span>
+              <span>{result.matchResult.pot.toLocaleString()} tokens</span>
+            </div>
           </div>
         </div>
 
-        {/* Score Summary */}
-        <div className="bg-white/5 rounded-lg p-4 mb-6 text-center">
-          <div className="text-sm text-gray-400 mb-2">Final Score</div>
-          <div className="text-lg">
-            <span className="text-blue-400">You {result.matchResult.challengerWins}</span>
-            <span className="text-gray-400 mx-2">-</span>
-            <span className="text-orange-400">{result.matchResult.creatorWins} Opponent</span>
-            {result.matchResult.draws > 0 && (
-              <span className="text-yellow-400"> ({result.matchResult.draws} draws)</span>
-            )}
-          </div>
-        </div>
-
-        {/* Round Details */}
-        {result.challengerMoves && result.creatorMoves && result.challengerMoves.length > 0 && (
+        {/* Round Results */}
+        {result.creatorMoves && result.challengerMoves && (
           <div className="bg-white/5 rounded-lg p-4 mb-6">
-            <div className="text-sm font-medium mb-3">Round by Round</div>
+            <div className="text-sm font-medium mb-3">Round by Round:</div>
             <div className="space-y-2">
-              {result.challengerMoves.map((myMove, index) => {
-                const oppMove = result.creatorMoves[index];
+              {result.creatorMoves.map((creatorMove, index) => {
+                const challengerMove = result.challengerMoves[index];
                 const roundResult = 
-                  myMove === oppMove ? 'Draw' :
-                  (myMove === 'R' && oppMove === 'S') || 
-                  (myMove === 'P' && oppMove === 'R') || 
-                  (myMove === 'S' && oppMove === 'P') ? 'Win' : 'Loss';
-                
+                  creatorMove === challengerMove ? 'Draw' :
+                  (creatorMove === 'R' && challengerMove === 'S') ||
+                  (creatorMove === 'P' && challengerMove === 'R') ||
+                  (creatorMove === 'S' && challengerMove === 'P') ? 'Loss' : 'Win';
+
                 return (
                   <div key={index} className="flex justify-between items-center text-sm">
-                    <span className="text-gray-400">Round {index + 1}:</span>
                     <div className="flex items-center gap-2">
-                      <span>{moveEmojis[myMove]}</span>
-                      <span className="text-gray-400">vs</span>
-                      <span>{moveEmojis[oppMove]}</span>
-                      <span className={`ml-2 font-medium ${
+                      <span>Round {index + 1}:</span>
+                      <span>{moveEmojis[challengerMove]} vs {moveEmojis[creatorMove]}</span>
+                    </div>
+                    <div>
+                      <span className={`font-medium ${
                         roundResult === 'Win' ? 'text-green-400' :
                         roundResult === 'Loss' ? 'text-red-400' :
                         'text-yellow-400'
