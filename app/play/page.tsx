@@ -1,4 +1,4 @@
-// app/play/page.tsx - COMPLETE VERSION WITH ALL ORIGINAL FEATURES + ALICE'S REAL MOVES FIX
+// app/play/page.tsx - COMPLETE REWRITE - Fixed Balance & User Detection
 "use client";
 import { useEffect, useState } from "react";
 import { useWallet } from "../../src/state/wallet";
@@ -8,6 +8,7 @@ type Move = 'R' | 'P' | 'S';
 interface SessionCard {
   id: string;
   creator: string;
+  creatorId: string;
   rounds: number;
   stakePerRound: number;
   totalStake: number;
@@ -26,201 +27,178 @@ export default function PlayPage() {
   const [isCreating, setIsCreating] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showSuccessDialog, setShowSuccessDialog] = useState(false);
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [showDeleteSuccessDialog, setShowDeleteSuccessDialog] = useState(false);
-  const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+  const [isInitialized, setIsInitialized] = useState(false);
 
-  // Local storage key for persistent game tracking
-  const STORAGE_KEY = `solrps_created_games_${wallet.userId || 'default'}`;
+  // Move helper functions
+  const getMoveEmoji = (move: Move): string => {
+    switch (move) {
+      case 'R': return '🪨';
+      case 'P': return '📄';
+      case 'S': return '✂️';
+    }
+  };
 
-  // ENHANCED WALLET INITIALIZATION - Force correct user detection
+  // FIXED: Proper wallet initialization with balance persistence
   useEffect(() => {
     const initializeWallet = async () => {
-      console.log('Initializing wallet...');
+      if (isInitialized) return;
       
-      // Force detect user from URL
+      console.log('🎮 Initializing wallet...');
+      
+      // Determine user from URL
       const urlParams = new URLSearchParams(window.location.search);
       const userParam = urlParams.get('user') || 'alice';
       const targetUserId = userParam === 'alice' ? 'seed_alice' : 'seed_bob';
       
-      console.log(`URL says user should be: ${userParam} (${targetUserId})`);
-      console.log(`Current wallet state:`, {
-        userId: wallet.userId,
-        displayName: wallet.displayName,
-        isConnected: wallet.isConnected
-      });
+      console.log(`Target user: ${userParam} (${targetUserId})`);
       
-      // Force switch if needed
-      if (!wallet.isConnected || wallet.userId !== targetUserId) {
-        console.log(`Wallet needs switching from ${wallet.userId} to ${targetUserId}`);
-        
-        try {
-          await wallet.switchUser(targetUserId);
-          console.log(`Wallet switched successfully to: ${wallet.displayName} (${wallet.userId})`);
-        } catch (error) {
-          console.error('Failed to switch wallet:', error);
+      try {
+        // Always fetch fresh data from API
+        const response = await fetch(`/api/user/${targetUserId}`);
+        if (response.ok) {
+          const userData = await response.json();
+          console.log(`✅ Fetched user data:`, userData);
+          
+          // Connect with real balance from database
+          wallet.connect(
+            targetUserId, 
+            userData.mockBalance || userData.balance || 500000, 
+            userData.displayName || (targetUserId === 'seed_alice' ? 'Alice' : 'Bob')
+          );
+          
+          console.log(`✅ Connected as: ${userData.displayName || targetUserId} with balance: ${userData.mockBalance}`);
+        } else {
+          throw new Error(`API responded with ${response.status}`);
         }
-      } else {
-        console.log(`Wallet already correct: ${wallet.displayName} (${wallet.userId})`);
+      } catch (error) {
+        console.error('❌ Failed to fetch user data, using defaults:', error);
+        
+        // Fallback to seed data
+        const defaultBalance = 500000;
+        const displayName = targetUserId === 'seed_alice' ? 'Alice' : 'Bob';
+        wallet.connect(targetUserId, defaultBalance, displayName);
       }
+      
+      setIsInitialized(true);
     };
 
-    // Initialize wallet first
-    if (!wallet.userId) {
+    if (!wallet.isConnected || !isInitialized) {
       initializeWallet();
-    } else {
-      // If wallet already connected, load persistent games
-      loadPersistentGames();
     }
-  }, [wallet.userId]);
+  }, []); // Remove wallet dependencies to prevent loops
 
-  // Check for resolved games every time component mounts
+  // Load games after wallet is initialized
   useEffect(() => {
-    if (wallet.userId && createdSessions.length > 0) {
+    if (wallet.isConnected && isInitialized) {
+      loadPersistentGames();
       checkForResolvedGames();
     }
-  }, [createdSessions, wallet.userId]);
+  }, [wallet.isConnected, wallet.userId, isInitialized]);
 
-  // Initialize moves array when rounds change
+  // Initialize moves when rounds change
   useEffect(() => {
     setSelectedMoves(new Array(selectedRounds).fill('R'));
   }, [selectedRounds]);
 
-  const loadPersistentGames = () => {
+  // FIXED: Game persistence with proper user filtering
+  const loadPersistentGames = async () => {
     if (!wallet.userId) return;
     
+    console.log(`📚 Loading games for: ${wallet.displayName} (${wallet.userId})`);
+    
     try {
+      // First, try to load from API (shows server-side games)
+      const response = await fetch(`/api/session/my?userId=${wallet.userId}`);
+      if (response.ok) {
+        const data = await response.json();
+        console.log(`✅ Loaded ${data.sessions?.length || 0} games from API`);
+        
+        if (data.sessions && data.sessions.length > 0) {
+          const apiSessions: SessionCard[] = data.sessions.map((s: any) => ({
+            id: s.id,
+            creator: wallet.displayName || 'You',
+            creatorId: wallet.userId || '',
+            rounds: s.rounds,
+            stakePerRound: s.stakePerRound,
+            totalStake: s.totalStake,
+            createdAt: s.createdAt || new Date().toISOString(),
+            status: s.status || 'OPEN'
+          }));
+          
+          setCreatedSessions(apiSessions);
+          
+          // Also save to localStorage for persistence
+          const STORAGE_KEY = `solrps_created_games_${wallet.userId}`;
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(apiSessions));
+          return;
+        }
+      }
+      
+      // Fallback to localStorage
+      const STORAGE_KEY = `solrps_created_games_${wallet.userId}`;
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
         const games = JSON.parse(stored);
-        // Filter out locally deleted games
         const activeGames = games.filter((game: SessionCard) => !game.isLocallyDeleted);
+        console.log(`📦 Loaded ${activeGames.length} games from localStorage`);
         setCreatedSessions(activeGames);
-        console.log(`Loaded ${activeGames.length} persistent games for ${wallet.displayName}`);
       }
     } catch (error) {
-      console.error('Failed to load persistent games:', error);
+      console.error('Failed to load games:', error);
     }
   };
 
   const savePersistentGames = (games: SessionCard[]) => {
     if (!wallet.userId) return;
-    
     try {
+      const STORAGE_KEY = `solrps_created_games_${wallet.userId}`;
       localStorage.setItem(STORAGE_KEY, JSON.stringify(games));
-      console.log(`Saved ${games.length} games to localStorage`);
     } catch (error) {
-      console.error('Failed to save persistent games:', error);
+      console.error('Failed to save games:', error);
     }
   };
 
+  // Check for resolved games
   const checkForResolvedGames = async () => {
     if (!wallet.userId || createdSessions.length === 0) return;
 
     try {
-      // Check each session's current status
-      const updatedSessions = [];
-      let hasChanges = false;
-      
       for (const session of createdSessions) {
-        try {
+        if (session.status === 'OPEN') {
           const response = await fetch(`/api/session/${session.id}`);
           if (response.ok) {
             const sessionData = await response.json();
-            
-            // If session is resolved, don't include it
-            if (sessionData.status !== 'RESOLVED') {
-              const updatedSession = { ...session, status: sessionData.status };
-              updatedSessions.push(updatedSession);
-              
-              // Check if status changed
-              if (session.status !== sessionData.status) {
-                hasChanges = true;
-              }
-            } else {
-              hasChanges = true; // Game was resolved, remove from list
-              console.log(`Session ${session.id} resolved, removing from list`);
+            if (sessionData.status !== 'OPEN') {
+              console.log(`🎯 Game ${session.id} resolved, removing from display`);
+              const updatedSessions = createdSessions.filter(s => s.id !== session.id);
+              setCreatedSessions(updatedSessions);
+              savePersistentGames(updatedSessions);
             }
-          } else {
-            // Session doesn't exist anymore, remove it
-            hasChanges = true;
-            console.log(`Session ${session.id} no longer exists, removing`);
           }
-        } catch (error) {
-          // If session check fails, remove it from the list
-          hasChanges = true;
-          console.log(`Session ${session.id} check failed, removing`);
         }
       }
-
-      // Only update if there's a change
-      if (hasChanges) {
-        setCreatedSessions(updatedSessions);
-        savePersistentGames(updatedSessions);
-        console.log(`Updated sessions: ${createdSessions.length} -> ${updatedSessions.length}`);
-      }
-      
     } catch (error) {
       console.error('Failed to check resolved games:', error);
     }
   };
 
-  const handleManualRefresh = async () => {
-    setIsRefreshing(true);
-    try {
-      console.log('Manual refresh started...');
-      
-      // Check for resolved games
-      await checkForResolvedGames();
-      
-      // Force refresh balance too
-      if (wallet.userId) {
-        const userResponse = await fetch(`/api/user/${wallet.userId}`);
-        if (userResponse.ok) {
-          const userData = await userResponse.json();
-          wallet.setBalance(userData.balance);
-          console.log(`Refreshed balance: ${userData.balance}`);
-        }
-      }
-      
-      console.log('Manual refresh completed');
-    } catch (error) {
-      console.error('Failed to refresh:', error);
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
-
-  const getMoveEmoji = (move: Move) => {
-    const emojis = { R: '🪨', P: '📄', S: '✂️' };
-    return emojis[move];
-  };
-
-  const getMoveLabel = (move: Move) => {
-    const labels = { R: 'Rock', P: 'Paper', S: 'Scissors' };
-    return labels[move];
-  };
-
+  // Move selection
   const selectMove = (roundIndex: number, move: Move) => {
     const newMoves = [...selectedMoves];
     newMoves[roundIndex] = move;
     setSelectedMoves(newMoves);
   };
 
-  const canCreateGame = selectedMoves.filter(Boolean).length === selectedRounds && 
-                       (wallet.balance || 0) >= (selectedRounds * selectedStake);
-
-  // Simple hash function for commit-reveal
+  // Hash function for commit-reveal
   const simpleHash = async (input: string): Promise<string> => {
-    try {
+    if (typeof window !== 'undefined' && window.crypto && window.crypto.subtle) {
       const encoder = new TextEncoder();
       const data = encoder.encode(input);
-      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
       const hashArray = Array.from(new Uint8Array(hashBuffer));
       return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    } catch (error) {
-      // Fallback for environments without crypto.subtle
+    } else {
       let hash = 0;
       for (let i = 0; i < input.length; i++) {
         const char = input.charCodeAt(i);
@@ -231,30 +209,27 @@ export default function PlayPage() {
     }
   };
 
+  // FIXED: Create game with proper balance updates
   const handleCreateGame = async () => {
     if (!canCreateGame) return;
 
     setIsCreating(true);
     try {
-      // Generate salt and commit hash
       const salt = Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
       const moveString = selectedMoves.join('');
       const commitHash = await simpleHash(moveString + salt);
-      
-      console.log(`Creating game with moves: ${selectedMoves.join(',')} and salt: ${salt}`);
       
       const requestBody = {
         rounds: selectedRounds,
         stakePerRound: selectedStake,
         commitHash: commitHash,
         isPrivate,
-        // CRUCIAL: Send Alice's actual moves and salt to be stored
         moves: selectedMoves,
         salt: salt,
-        userId: wallet.userId // Explicit user ID for API detection
+        userId: wallet.userId
       };
 
-      console.log('Create game request:', requestBody);
+      console.log(`🎮 Creating game for ${wallet.displayName}:`, requestBody);
 
       const response = await fetch('/api/session/create', {
         method: 'POST',
@@ -267,8 +242,7 @@ export default function PlayPage() {
       });
 
       const responseText = await response.text();
-      console.log('Create game raw response:', responseText);
-
+      
       if (!response.ok) {
         let errorMessage = 'Failed to create game';
         try {
@@ -281,285 +255,280 @@ export default function PlayPage() {
       }
 
       const data = JSON.parse(responseText);
-      console.log('Create game parsed response:', data);
+      console.log('✅ Game created successfully:', data);
       
-      // Store moves and salt in localStorage for later reveal (Phase 2 compatibility)
+      // Store moves and salt in localStorage
       if (typeof window !== 'undefined') {
         localStorage.setItem(`solrps_moves_${data.sessionId}`, JSON.stringify(selectedMoves));
         localStorage.setItem(`solrps_salt_${data.sessionId}`, salt);
-        console.log(`Stored moves and salt for session ${data.sessionId}`);
       }
-      
-      // Create new session and persist it
+
+      // Add to created sessions
       const newSession: SessionCard = {
         id: data.sessionId,
-        creator: wallet.displayName || wallet.userId || 'You',
+        creator: wallet.displayName || 'You',
+        creatorId: wallet.userId || '',
         rounds: selectedRounds,
         stakePerRound: selectedStake,
         totalStake: selectedRounds * selectedStake,
         createdAt: new Date().toISOString(),
-        status: 'OPEN',
-        isLocallyDeleted: false,
+        status: 'OPEN'
       };
-      
+
       const updatedSessions = [newSession, ...createdSessions];
       setCreatedSessions(updatedSessions);
       savePersistentGames(updatedSessions);
 
-      // Reset form to defaults
-      setSelectedMoves(new Array(selectedRounds).fill('R'));
-      
-      // Refresh wallet balance
-      try {
-        const userResponse = await fetch(`/api/user/${wallet.userId}`);
-        if (userResponse.ok) {
-          const userData = await userResponse.json();
-          wallet.setBalance(userData.balance);
-          console.log(`Balance updated after game creation: ${userData.balance}`);
-        }
-      } catch (e) {
-        console.warn('Failed to refresh balance:', e);
+      // FIXED: Update balance properly
+      if (data.newBalance !== undefined) {
+        wallet.setBalance(data.newBalance);
+      } else {
+        // Fallback: manually deduct the stake
+        wallet.setBalance(wallet.balance - (selectedRounds * selectedStake));
       }
       
-      // Show success dialog
+      // Show success and refresh
       setShowSuccessDialog(true);
-      
-      console.log(`Game created successfully: ${data.sessionId}`);
-      
-    } catch (error: any) {
-      console.error('Failed to create game:', error);
-      alert(`Failed to create game: ${error.message}`);
+
+    } catch (error) {
+      console.error('❌ Create game error:', error);
+      alert(`Failed to create game: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setIsCreating(false);
     }
   };
 
-  const handleDeleteRequest = (sessionId: string) => {
-    setSessionToDelete(sessionId);
-    setShowDeleteDialog(true);
-  };
+  // FIXED: Delete game with proper refunds
+  const handleDeleteGame = async (sessionId: string) => {
+    if (!confirm('Are you sure you want to delete this game?')) return;
 
-  const handleConfirmDelete = async () => {
-    if (!sessionToDelete) return;
-
-    setShowDeleteDialog(false);
-    setDeletingSessionId(sessionToDelete);
-    
+    setDeletingSessionId(sessionId);
     try {
-      const response = await fetch('/api/session/cancel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: sessionToDelete }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Failed to delete game');
-      }
-
-      console.log(`Successfully cancelled session ${sessionToDelete}`);
-
-      // Mark as locally deleted and persist
-      const updatedSessions = createdSessions
-        .filter(session => session.id !== sessionToDelete); // Remove from display
-      
-      setCreatedSessions(updatedSessions);
-      savePersistentGames([
-        ...updatedSessions,
-        // Keep record of deleted session in localStorage for tracking
-        ...createdSessions
-          .filter(s => s.id === sessionToDelete)
-          .map(s => ({ ...s, isLocallyDeleted: true }))
-      ]);
-      
-      // Refresh wallet balance (user gets refund)
-      try {
-        const userResponse = await fetch(`/api/user/${wallet.userId}`);
-        if (userResponse.ok) {
-          const userData = await userResponse.json();
-          wallet.setBalance(userData.balance);
-          console.log(`Balance updated after deletion: ${userData.balance}`);
+      // For OPEN games, try to cancel on server to get refund
+      const session = createdSessions.find(s => s.id === sessionId);
+      if (session?.status === 'OPEN') {
+        try {
+          const response = await fetch('/api/session/cancel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId }),
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            console.log('✅ Game cancelled, refund processed:', data);
+            // Update balance if refund successful
+            if (data.newBalance !== undefined) {
+              wallet.setBalance(data.newBalance);
+            }
+          }
+        } catch (error) {
+          console.log('Cancel API failed, will delete locally only:', error);
         }
-      } catch (e) {
-        console.warn('Failed to refresh balance:', e);
       }
 
-      // Show success dialog
-      setShowDeleteSuccessDialog(true);
-      
-    } catch (error: any) {
-      console.error('Failed to delete game:', error);
-      alert(`Failed to delete game: ${error.message}`);
+      // Remove from local storage regardless of server response
+      const updatedSessions = createdSessions.filter(s => s.id !== sessionId);
+      setCreatedSessions(updatedSessions);
+      savePersistentGames(updatedSessions);
+
+      // Clean up localStorage
+      localStorage.removeItem(`solrps_moves_${sessionId}`);
+      localStorage.removeItem(`solrps_salt_${sessionId}`);
+
+    } catch (error) {
+      console.error('❌ Delete game error:', error);
+      alert('Failed to delete game');
     } finally {
       setDeletingSessionId(null);
-      setSessionToDelete(null);
     }
   };
 
-  const handleCancelDelete = () => {
-    setShowDeleteDialog(false);
-    setSessionToDelete(null);
+  // FIXED: Manual refresh with balance update
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      // Refresh wallet balance first
+      if (wallet.userId) {
+        const response = await fetch(`/api/user/${wallet.userId}`);
+        if (response.ok) {
+          const userData = await response.json();
+          wallet.setBalance(userData.mockBalance || userData.balance);
+          console.log(`✅ Balance refreshed: ${userData.mockBalance}`);
+        }
+      }
+      
+      // Then check for resolved games
+      await checkForResolvedGames();
+      
+      // Reload persistent games
+      await loadPersistentGames();
+      
+    } catch (error) {
+      console.error('❌ Manual refresh failed:', error);
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
+  // Copy session ID
   const copyToClipboard = async (text: string) => {
     try {
-      if (navigator.clipboard) {
+      if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(text);
+        alert('Session ID copied to clipboard!');
       } else {
-        // Fallback for older browsers
         const textArea = document.createElement('textarea');
         textArea.value = text;
         document.body.appendChild(textArea);
         textArea.select();
         document.execCommand('copy');
         document.body.removeChild(textArea);
+        alert('Session ID copied to clipboard!');
       }
-      alert('Session ID copied to clipboard!');
     } catch (error) {
       console.error('Failed to copy:', error);
       alert(`Copy failed. Session ID: ${text}`);
     }
   };
 
-  // Show loading if wallet not connected
-  if (!wallet.userId) {
+  // FIXED: Handle success dialog dismissal with proper refresh
+  const handleSuccessDialogClose = async () => {
+    setShowSuccessDialog(false);
+    // Refresh both sections
+    await loadPersistentGames();
+    await handleManualRefresh();
+  };
+
+  // Validation
+  const allMovesSelected = selectedMoves.filter(Boolean).length === selectedRounds;
+  const hasEnoughBalance = wallet.balance >= (selectedRounds * selectedStake);
+  const canCreateGame = allMovesSelected && hasEnoughBalance && !isCreating && wallet.isConnected;
+
+  // FIXED: Loading state with better user feedback
+  if (!isInitialized || !wallet.isConnected) {
     return (
       <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
         <div className="text-center">
-          <div className="text-2xl mb-2">⚡</div>
-          <div className="text-lg">Loading wallet...</div>
-          <div className="text-sm text-gray-400 mt-2">Connecting as user...</div>
+          <div className="text-3xl mb-4">⚡</div>
+          <div className="text-lg mb-2">Loading wallet...</div>
+          <div className="text-sm text-gray-400">
+            {!isInitialized ? 'Initializing...' : 'Connecting user...'}
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="max-w-4xl mx-auto p-6 space-y-6 min-h-screen bg-slate-900 text-white">
-      {/* Header */}
+    <div className="max-w-4xl mx-auto p-4 md:p-6 space-y-6 min-h-screen bg-slate-900 text-white">
+      {/* FIXED: Header with proper balance display */}
       <div className="text-center">
-        <h1 className="text-3xl font-bold mb-2">🎮 Create Game</h1>
-        <p className="text-gray-400">Set up your Rock Paper Scissors challenge</p>
-        <div className="mt-4 bg-slate-800 rounded-lg px-6 py-3 inline-block">
-          <div className="text-sm text-gray-400 mb-1">Playing as</div>
-          <div className="text-lg font-medium text-blue-400">
-            {wallet.displayName || 'Unknown'}
+        <h1 className="text-2xl md:text-3xl font-bold mb-2">🎮 Create Game</h1>
+        <div className="bg-slate-800 rounded-lg px-4 py-2 inline-block">
+          <div className="text-sm font-medium text-blue-400">
+            {wallet.displayName} ({wallet.userId?.slice(-4)})
           </div>
-          <div className="text-sm">
-            <span className="text-gray-400">Balance: </span>
+          <div className="text-xs">
             <span className="text-green-400 font-mono">
-              {(wallet.balance || 0).toLocaleString()} tokens
+              {(wallet.balance || 0).toLocaleString()} RPS
             </span>
           </div>
         </div>
       </div>
 
-      {/* Phase 2 Mode Indicator */}
-      <div className="bg-slate-800 border border-white/10 rounded-lg p-4 mb-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-lg font-semibold">🔧 Phase 1 - Mock Mode</h3>
-            <p className="text-gray-400 text-sm">
-              Games use mock escrow. No real transactions. Alice's actual moves now used!
-            </p>
-          </div>
-          <div className="flex gap-1">
-            <span className="text-xs bg-yellow-600 text-black px-2 py-1 rounded">
-              MOCK
-            </span>
-            <span className="text-xs bg-purple-600 text-white px-2 py-1 rounded">
-              PHASE 2 READY
-            </span>
+      {/* Success Dialog */}
+      {showSuccessDialog && (
+        <div 
+          className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50"
+          onClick={handleSuccessDialogClose}
+        >
+          <div 
+            className="bg-slate-800 rounded-xl p-8 max-w-sm w-full text-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-4xl mb-4">🎉</div>
+            <h3 className="text-xl font-bold text-green-400">Game Successfully Created</h3>
+            <p className="text-gray-400 text-sm mt-4">Click anywhere to continue</p>
           </div>
         </div>
-      </div>
+      )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Game Creation Form */}
-        <div className="bg-slate-800 rounded-xl p-6">
-          <h2 className="text-xl font-semibold mb-6">Create New Game</h2>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Create Game Form */}
+        <div className="bg-slate-800 rounded-xl p-4 md:p-6">
+          <h2 className="text-lg font-semibold mb-4">Create New Game</h2>
 
           {/* Rounds Selection */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium mb-3">Number of Rounds</label>
-            <div className="grid grid-cols-3 gap-3">
+          <div className="mb-4">
+            <label className="block text-sm font-medium mb-2">Rounds</label>
+            <div className="grid grid-cols-3 gap-2">
               {([1, 3, 5] as const).map((rounds) => (
                 <button
                   key={rounds}
                   onClick={() => setSelectedRounds(rounds)}
-                  className={`p-3 rounded-lg border-2 transition-colors text-center ${
+                  className={`py-2 px-3 rounded-lg border transition-colors text-center ${
                     selectedRounds === rounds
                       ? 'bg-blue-600 text-white border-blue-400'
                       : 'bg-white/5 border-white/10 hover:bg-white/10'
                   }`}
                 >
                   <div className="font-semibold">{rounds}</div>
-                  <div className="text-xs opacity-75">Round{rounds > 1 ? 's' : ''}</div>
                 </button>
               ))}
             </div>
           </div>
 
           {/* Stake Selection */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium mb-3">Stake per Round</label>
-            <div className="grid grid-cols-3 gap-3">
+          <div className="mb-4">
+            <label className="block text-sm font-medium mb-2">Stake per Round</label>
+            <div className="grid grid-cols-3 gap-2">
               {([100, 500, 1000] as const).map((stake) => (
                 <button
                   key={stake}
                   onClick={() => setSelectedStake(stake)}
-                  className={`p-3 rounded-lg border-2 transition-colors text-center ${
+                  className={`py-2 px-3 rounded-lg border transition-colors text-center ${
                     selectedStake === stake
                       ? 'bg-purple-600 text-white border-purple-400'
                       : 'bg-white/5 border-white/10 hover:bg-white/10'
                   }`}
                 >
                   <div className="font-semibold">{stake}</div>
-                  <div className="text-xs opacity-75">Tokens</div>
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Move Selection */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium mb-3">Your Moves (These will be used in the game!)</label>
-            <div className="space-y-4">
+          {/* Move Selection - Emojis Only */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium mb-2">Your Moves</label>
+            <div className="space-y-2">
               {Array.from({ length: selectedRounds }, (_, index) => (
-                <div key={index} className="bg-white/5 rounded-lg p-4">
-                  <div className="text-sm text-gray-400 mb-3">Round {index + 1}</div>
+                <div key={index} className="bg-white/5 rounded-lg p-3">
+                  <div className="text-xs text-gray-400 mb-2">Round {index + 1}</div>
                   <div className="grid grid-cols-3 gap-2">
                     {(['R', 'P', 'S'] as Move[]).map((move) => (
                       <button
                         key={move}
                         onClick={() => selectMove(index, move)}
-                        className={`p-3 rounded-lg border-2 transition-colors text-center ${
+                        className={`py-3 px-3 rounded-lg border transition-colors text-center ${
                           selectedMoves[index] === move
                             ? 'bg-green-600 text-white border-green-400'
                             : 'bg-white/10 hover:bg-white/20 border-transparent'
                         }`}
                       >
-                        <div className="text-xl mb-1">{getMoveEmoji(move)}</div>
-                        <div className="text-xs">{getMoveLabel(move)}</div>
+                        <div className="text-2xl">{getMoveEmoji(move)}</div>
                       </button>
                     ))}
-                  </div>
-                  <div className="text-center mt-3">
-                    <div className="text-2xl">
-                      {selectedMoves[index] ? getMoveEmoji(selectedMoves[index]) : '❓'}
-                    </div>
-                    <div className="text-xs text-gray-400 mt-1">
-                      {selectedMoves[index] ? getMoveLabel(selectedMoves[index]) : 'Choose your move'}
-                    </div>
                   </div>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Game Settings */}
-          <div className="mb-6">
-            <label className="flex items-center gap-3">
+          {/* Private Game Option */}
+          <div className="mb-4">
+            <label className="flex items-center gap-2">
               <input
                 type="checkbox"
                 checked={isPrivate}
@@ -571,26 +540,18 @@ export default function PlayPage() {
           </div>
 
           {/* Cost Summary */}
-          <div className="bg-white/5 rounded-lg p-4 mb-6">
-            <div className="text-sm space-y-2">
+          <div className="bg-white/5 rounded-lg p-3 mb-4">
+            <div className="text-sm space-y-1">
               <div className="flex justify-between">
-                <span>Rounds:</span>
-                <span>{selectedRounds}</span>
+                <span>Cost:</span>
+                <span className="font-semibold text-yellow-400">{selectedRounds * selectedStake} RPS</span>
               </div>
               <div className="flex justify-between">
-                <span>Stake per Round:</span>
-                <span>{selectedStake} tokens</span>
-              </div>
-              <div className="flex justify-between font-semibold text-yellow-400">
-                <span>Total Cost:</span>
-                <span>{selectedRounds * selectedStake} tokens</span>
-              </div>
-              <div className="flex justify-between text-green-400">
                 <span>Potential Win:</span>
-                <span>{Math.floor((selectedRounds * selectedStake * 2) * 0.95)} tokens</span>
+                <span className="text-green-400">{Math.floor((selectedRounds * selectedStake * 2) * 0.95)} RPS</span>
               </div>
-              <div className="flex justify-between text-gray-400 text-xs">
-                <span>Fees (on wins only):</span>
+              <div className="flex justify-between text-xs text-gray-400">
+                <span>Fees (wins only):</span>
                 <span>5% of pot</span>
               </div>
             </div>
@@ -610,25 +571,34 @@ export default function PlayPage() {
           </button>
 
           {/* Error Messages */}
-          {!canCreateGame && (
-            <div className="text-center mt-3">
-              {selectedMoves.filter(Boolean).length !== selectedRounds ? (
-                <p className="text-yellow-400 text-sm">Please select moves for all rounds</p>
+          {!canCreateGame && wallet.isConnected && (
+            <div className="text-center mt-2">
+              {!allMovesSelected ? (
+                <p className="text-yellow-400 text-xs">Select moves for all rounds</p>
+              ) : !hasEnoughBalance ? (
+                <p className="text-red-400 text-xs">Insufficient balance (need {selectedRounds * selectedStake} RPS)</p>
               ) : (
-                <p className="text-red-400 text-sm">Insufficient balance</p>
+                <p className="text-gray-400 text-xs">Loading...</p>
               )}
             </div>
           )}
         </div>
 
-        {/* Your Games */}
-        <div className="bg-slate-800 rounded-xl p-6">
-          <div className="flex justify-between items-center mb-6">
-            <h2 className="text-xl font-semibold">Your Games ({createdSessions.length})</h2>
+        {/* FIXED: Your Games section */}
+        <div className="bg-slate-800 rounded-xl p-4 md:p-6">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-lg font-semibold">
+              Your Games ({createdSessions.length})
+              {wallet.displayName && (
+                <span className="text-sm text-gray-400 font-normal ml-2">
+                  - {wallet.displayName}
+                </span>
+              )}
+            </h2>
             <button
               onClick={handleManualRefresh}
               disabled={isRefreshing}
-              className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
+              className={`px-3 py-1 rounded-lg transition-colors flex items-center gap-1 text-sm ${
                 isRefreshing
                   ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
                   : 'bg-blue-600 hover:bg-blue-700 text-white'
@@ -643,53 +613,52 @@ export default function PlayPage() {
             <div className="text-center py-8 text-gray-400">
               <div className="text-2xl mb-2">🎮</div>
               <div>No active games</div>
-              <div className="text-sm mt-1">Create your first game to get started!</div>
+              <div className="text-xs mt-1">Create your first game to get started!</div>
             </div>
           ) : (
-            <div className="space-y-4">
+            <div className="space-y-3">
               {createdSessions.map((session) => (
-                <div key={session.id} className="bg-white/5 rounded-lg p-4">
-                  <div className="flex justify-between items-start mb-3">
+                <div key={session.id} className="bg-white/5 rounded-lg p-3">
+                  <div className="flex justify-between items-start mb-2">
                     <div>
-                      <div className="font-medium">
-                        {session.rounds} rounds @ {session.stakePerRound} each
+                      <div className="font-medium text-sm">
+                        {session.rounds} rounds × {session.stakePerRound} RPS
                       </div>
-                      <div className="text-sm text-gray-400">
-                        Total: {session.totalStake} tokens
+                      <div className="text-xs text-gray-400">
+                        Total: {session.totalStake} RPS
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        ID: {session.id.slice(0, 8)}...
                       </div>
                     </div>
-                    <div className="text-right">
-                      <div className="text-sm text-gray-400">Status</div>
-                      <div className={`px-2 py-1 rounded text-xs ${
-                        session.status === 'OPEN' ? 'bg-yellow-600 text-yellow-100' :
-                        session.status === 'AWAITING_REVEAL' ? 'bg-orange-600 text-orange-100' :
-                        'bg-green-600 text-green-100'
-                      }`}>
-                        {session.status === 'OPEN' ? 'WAITING' : 
-                         session.status === 'AWAITING_REVEAL' ? 'JOINED' : 
-                         session.status}
-                      </div>
+                    <div className={`px-2 py-1 rounded text-xs ${
+                      session.status === 'OPEN' ? 'bg-yellow-600 text-yellow-100' :
+                      session.status === 'AWAITING_REVEAL' ? 'bg-orange-600 text-orange-100' :
+                      'bg-green-600 text-green-100'
+                    }`}>
+                      {session.status === 'OPEN' ? 'WAITING' : 
+                       session.status === 'AWAITING_REVEAL' ? 'IN PROGRESS' : 'COMPLETED'}
                     </div>
                   </div>
                   
                   <div className="flex gap-2">
                     <button
                       onClick={() => copyToClipboard(session.id)}
-                      className="flex-1 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm transition-colors"
+                      className="bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 px-2 py-1 rounded text-xs"
+                      title="Copy Session ID"
                     >
-                      📋 Copy Session ID
+                      📋
                     </button>
                     <button
-                      onClick={() => handleDeleteRequest(session.id)}
+                      onClick={() => handleDeleteGame(session.id)}
                       disabled={deletingSessionId === session.id}
-                      className="px-3 py-2 bg-red-600 hover:bg-red-700 disabled:bg-red-800 disabled:cursor-not-allowed text-white rounded text-sm transition-colors"
+                      className={`bg-red-600/20 hover:bg-red-600/30 text-red-400 px-2 py-1 rounded text-xs ${
+                        deletingSessionId === session.id ? 'opacity-50 cursor-not-allowed' : ''
+                      }`}
+                      title="Delete Game"
                     >
                       {deletingSessionId === session.id ? '⟳' : '🗑️'}
                     </button>
-                  </div>
-                  
-                  <div className="text-xs text-gray-500 mt-2 font-mono">
-                    {session.id.slice(0, 12)}...{session.id.slice(-8)}
                   </div>
                 </div>
               ))}
@@ -697,77 +666,6 @@ export default function PlayPage() {
           )}
         </div>
       </div>
-
-      {/* Success Dialog */}
-      {showSuccessDialog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-800 rounded-xl p-6 max-w-md w-full">
-            <div className="text-center">
-              <div className="text-4xl mb-4">🎉</div>
-              <h3 className="text-xl font-bold mb-2">Game Created!</h3>
-              <p className="text-gray-400 mb-6">
-                Your game is now live and ready for challengers to join. Your selected moves will be used in the actual game!
-              </p>
-              <button
-                onClick={() => setShowSuccessDialog(false)}
-                className="w-full py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium transition-colors"
-              >
-                Continue
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Delete Confirmation Dialog */}
-      {showDeleteDialog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-800 rounded-xl p-6 max-w-md w-full">
-            <div className="text-center">
-              <div className="text-4xl mb-4">⚠️</div>
-              <h3 className="text-xl font-bold mb-2">Delete Game?</h3>
-              <p className="text-gray-400 mb-6">
-                This will cancel the game and refund your stake. This action cannot be undone.
-              </p>
-              <div className="flex gap-3">
-                <button
-                  onClick={handleCancelDelete}
-                  className="flex-1 py-3 bg-gray-600 hover:bg-gray-700 rounded-lg font-medium transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleConfirmDelete}
-                  className="flex-1 py-3 bg-red-600 hover:bg-red-700 rounded-lg font-medium transition-colors"
-                >
-                  Delete Game
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Delete Success Dialog */}
-      {showDeleteSuccessDialog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-800 rounded-xl p-6 max-w-md w-full">
-            <div className="text-center">
-              <div className="text-4xl mb-4">✅</div>
-              <h3 className="text-xl font-bold mb-2">Game Deleted!</h3>
-              <p className="text-gray-400 mb-6">
-                Your game has been cancelled and your stake has been refunded.
-              </p>
-              <button
-                onClick={() => setShowDeleteSuccessDialog(false)}
-                className="w-full py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium transition-colors"
-              >
-                Continue
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

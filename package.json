@@ -16,6 +16,9 @@
     "test:watch": "vitest",
     "test:ui": "vitest --ui"
   },
+  "prisma": {
+    "seed": "node prisma/seed.js"
+  },
   "dependencies": {
     "@coral-xyz/anchor": "^0.31.1",
     "@prisma/client": "^5.17.0",

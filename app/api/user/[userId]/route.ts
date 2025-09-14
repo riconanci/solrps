@@ -1,13 +1,13 @@
-// app/api/user/[userId]/route.ts
+// app/api/user/[userId]/route.ts - FIXED for Next.js 15+
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { prisma } from "../../../../src/lib/db";
 
 export async function GET(
   request: Request,
-  { params }: { params: { userId: string } }
+  { params }: { params: Promise<{ userId: string }> }
 ) {
   try {
-    const { userId } = params;
+    const { userId } = await params; // FIXED: Await params
     
     // Only allow fetching seed users for security
     if (userId !== 'seed_alice' && userId !== 'seed_bob') {
@@ -31,7 +31,8 @@ export async function GET(
     return NextResponse.json({
       id: user.id,
       displayName: user.displayName,
-      balance: user.mockBalance
+      balance: user.mockBalance,
+      mockBalance: user.mockBalance // Include both for compatibility
     });
   } catch (error) {
     console.error("Error fetching user:", error);
