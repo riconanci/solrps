@@ -415,50 +415,17 @@ export default function LeaderboardPage() {
               </div>
             )}
 
-            {/* This Week's Top Players */}
-            {data.weeklyRewards.weeklyLeaderboard && data.weeklyRewards.weeklyLeaderboard.length > 0 && (
-              <div className="bg-slate-800 rounded-xl p-6">
-                <h3 className="text-xl font-bold mb-4">📊 This Week's Top Players</h3>
-                
-                <div className="space-y-2">
-                  {data.weeklyRewards.weeklyLeaderboard.map((player, index) => (
-                    <div key={player.userId} className="flex items-center justify-between bg-white/5 rounded-lg p-3">
-                      <div className="flex items-center gap-3">
-                        <div className="text-lg font-bold">
-                          {index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `#${index + 1}`}
-                        </div>
-                        <div>
-                          <div className="font-medium">{player.displayName}</div>
-                          <div className="text-sm text-gray-400">
-                            <span className="text-green-400">{player.matchesWon || 0} wins</span>
-                            <span className="mx-1">•</span>
-                            <span className="text-yellow-400 font-bold">{player.matchesPlayed || 0} played</span>
-                            <span className="mx-1">•</span>
-                            <span className="text-blue-400">{(player.totalWinnings || 0).toLocaleString()} tokens</span>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      <div className="text-right">
-                        <div className="font-bold text-purple-400">{player.points || 0} points</div>
-                        {player.matchesPlayed > 0 && (
-                          <div className="text-xs text-gray-400">
-                            {Math.round((player.matchesWon / player.matchesPlayed) * 100)}% win rate
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         )}
 
         {/* Main Overall Rankings Table */}
         <div className="bg-slate-800 rounded-xl p-6">
           <div className="flex items-center justify-between mb-6">
-            <h2 className="text-xl font-bold">📈 Overall Rankings</h2>
+            <h2 className="text-xl font-bold">
+              {timeframe === "week" ? "⚡ Weekly Competition Leaderboard" :
+               timeframe === "month" ? "📅 This Month's Leaderboard" :
+               "🏆 All-Time Leaderboard"}
+            </h2>
             <div className="text-sm text-gray-400">
               {data.totalPlayers} players • {data.totalMatches} matches
             </div>

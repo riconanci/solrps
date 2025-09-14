@@ -3,9 +3,9 @@ import { prisma } from "@/lib/db";
 
 // Weekly rewards eligibility requirements - ANTI-SYBIL PROTECTION (RELAXED FOR TESTING)
 const ELIGIBILITY_REQUIREMENTS = {
-  minUniqueOpponents: 1, // Must beat at least 1 different player (was 5)
-  maxWinShareFromSingleOpponent: 1.0, // Max 100% wins from one opponent (was 0.25)  
-  minTotalWins: 1, // Must have at least 1 win total (was 5)
+  minUniqueOpponents: 5, // Must beat at least 1 different player (was 5)
+  maxWinShareFromSingleOpponent: .25, // Max 100% wins from one opponent (was 0.25)  
+  minTotalWins: 5, // Must have at least 1 win total (was 5)
 };
 
 // Type definitions
