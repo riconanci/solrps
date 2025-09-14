@@ -1,6 +1,6 @@
 {
   "name": "solrps",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -14,7 +14,10 @@
     "db:studio": "prisma studio",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:ui": "vitest --ui"
+    "test:ui": "vitest --ui",
+    "phase2:enable-ui": "echo 'NEXT_PUBLIC_ENABLE_PHASE2=true' >> .env.local",
+    "phase2:enable-wallets": "echo 'NEXT_PUBLIC_USE_BLOCKCHAIN=true' >> .env.local",
+    "phase2:disable-wallets": "sed -i 's/NEXT_PUBLIC_USE_BLOCKCHAIN=true/NEXT_PUBLIC_USE_BLOCKCHAIN=false/' .env.local"
   },
   "prisma": {
     "seed": "node prisma/seed.js"
@@ -53,5 +56,19 @@
   },
   "engines": {
     "node": ">=18.17.0"
-  }
+  },
+  "keywords": [
+    "solana",
+    "blockchain",
+    "gaming",
+    "rock-paper-scissors",
+    "play-to-earn",
+    "web3"
+  ],
+  "description": "Rock Paper Scissors play-to-earn game on Solana blockchain with weekly competitions",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/riconanci/solrps"
+  },
+  "license": "MIT"
 }

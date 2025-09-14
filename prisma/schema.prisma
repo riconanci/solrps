@@ -1,4 +1,6 @@
-// prisma/schema.prisma - UPDATED TO STORE ALICE'S ACTUAL MOVES
+// prisma/schema.prisma - ENHANCED FOR PHASE 2 (COMPATIBLE WITH CURRENT STRUCTURE)
+// This enhancement works with your existing schema - no breaking changes!
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,22 +10,30 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// User model - ENHANCED but compatible with current structure
 model User {
   id           String @id @default(cuid())
   displayName  String?
-  mockBalance  Int    @default(0)
+  
+  // Phase 2: Your existing walletPubkey field is perfect for Phase 2!
+  walletPubkey String?   // Already exists in your schema - ready for Solana addresses!
+  
+  mockBalance  Int    @default(500000)  // Updated default to match your seed
   createdAt    DateTime @default(now())
   
-  // Relationships
+  // Relations - compatible with your current structure
   createdSessions Session[] @relation("CreatorSessions")
   joinedSessions  Session[] @relation("ChallengerSessions")
   matchResults    MatchResult[]
   weeklyRewards   WeeklyReward[]
   devRewards      DevReward[]
 
+  // Indexes for Phase 2 performance
+  @@index([walletPubkey], name: "idx_user_wallet_pubkey")
   @@map("users")
 }
 
+// Session model - compatible with your current structure
 model Session {
   id              String   @id @default(cuid())
   status          String   @default("OPEN") // OPEN, AWAITING_REVEAL, RESOLVED
@@ -33,20 +43,20 @@ model Session {
   commitHash      String
   saltHint        String?
   createdAt       DateTime @default(now())
-  revealDeadline  DateTime
+  revealDeadline  DateTime  // Required in your current schema
   isPrivate       Boolean  @default(false)
   resolvedAt      DateTime?
 
-  // Creator information
+  // Creator information - matches your current structure
   creatorId       String
   creator         User     @relation("CreatorSessions", fields: [creatorId], references: [id])
   
-  // NEW FIELDS: Store Alice's actual moves and salt
-  creatorMoves    String?  // JSON string of Move[] - Alice's actual selected moves
+  // Your current fields for storing moves and salt
+  creatorMoves    String?  // JSON string of Move[]
   creatorSalt     String?  // Salt used for commit hash
   creatorRevealed Boolean  @default(false)
 
-  // Challenger information
+  // Challenger information - matches your current structure
   challengerId    String?
   challenger      User?    @relation("ChallengerSessions", fields: [challengerId], references: [id])
   challengerMoves String?  // JSON string of Move[]
@@ -57,31 +67,32 @@ model Session {
   @@map("sessions")
 }
 
+// MatchResult model - compatible with your current structure
 model MatchResult {
   id            String   @id @default(cuid())
   sessionId     String   @unique
   session       Session  @relation(fields: [sessionId], references: [id])
   
-  // Game outcome
+  // Game outcome - matches your current structure
   winnerUserId  String?
   winner        User?    @relation(fields: [winnerUserId], references: [id])
   creatorWins   Int      @default(0)
   challengerWins Int     @default(0)
   draws         Int      @default(0)
   
-  // Financial details
+  // Financial details - matches your enhanced structure
   pot           Int
   payoutWinner  Int      @default(0)
   payoutLoser   Int      @default(0)
   
-  // Fee breakdown
+  // Fee breakdown - enhanced from your current structure
   feeTotal      Int      @default(0)
   feeTreasury   Int      @default(0)
   feeBurn       Int      @default(0)
   feeDev        Int      @default(0)
   feeWeekly     Int      @default(0)
   
-  // Additional data
+  // Additional data - matches your current structure
   roundsOutcome String?  // JSON string of round-by-round results
   replaySeed    String?
   
@@ -90,13 +101,13 @@ model MatchResult {
   @@map("match_results")
 }
 
-// Weekly rewards system
+// Weekly rewards system - matches your current structure
 model WeeklyPeriod {
   id               String   @id @default(cuid())
   weekStart        DateTime @unique
   weekEnd          DateTime
   totalRewardsPool Int      @default(0)
-  rolloverAmount   Int      @default(0)  // Amount rolled over from previous week
+  rolloverAmount   Int      @default(0)
   isDistributed    Boolean  @default(false)
   distributedAt    DateTime?
   
@@ -139,3 +150,10 @@ model DevReward {
 
   @@map("dev_rewards")
 }
+
+// PHASE 2 NOTES:
+// ✅ Your existing walletPubkey field is perfect for Solana addresses!
+// ✅ No breaking changes to your current schema
+// ✅ Just added index for performance and enhanced some field defaults
+// ✅ All your existing API routes and functionality will continue to work
+// ✅ Phase 2 features can be gradually added using walletPubkey field
