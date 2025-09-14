@@ -1,16 +1,24 @@
-// app/api/session/join/route.ts - COMPLETE REWRITE
+// app/api/session/join/route.ts - USES ALICE'S ACTUAL MOVES (NO MORE RANDOM!)
 import { NextResponse } from "next/server";
 import { joinSessionSchema } from "@/lib/zod";
 import { prisma } from "@/lib/db";
-import { getUserOrSeed } from "../../_utils";
 import { calcPot, payoutFromPot } from "@/lib/payout";
 import { tallyOutcome } from "@/lib/rps";
+import { getCurrentWeekStart } from "@/lib/weekly";
+import { getUserOrSeed } from "../../_utils";
+import { z } from "zod";
 import type { Move } from "@/lib/hash";
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const parsed = joinSessionSchema.safeParse(body);
+    
+    // Extended schema to allow optional userId for debugging
+    const extendedJoinSchema = joinSessionSchema.extend({
+      userId: z.string().optional()
+    });
+    
+    const parsed = extendedJoinSchema.safeParse(body);
     
     if (!parsed.success) {
       return NextResponse.json({ 
@@ -22,9 +30,41 @@ export async function POST(req: Request) {
 
     const { sessionId, challengerMoves } = parsed.data;
     
-    // Get current user - pass request for proper user detection
-    const user = await getUserOrSeed(req);
-    console.log(`🎮 Join API: User ${user.displayName} (${user.id}) joining session ${sessionId}`);
+    // ENHANCED USER DETECTION - Check multiple sources
+    let userId = "seed_alice"; // Default fallback
+    
+    // Method 1: Check request body for explicit userId (most reliable)
+    if (parsed.data.userId) {
+      userId = parsed.data.userId;
+      console.log(`Using explicit userId from request body: ${userId}`);
+    } else {
+      // Method 2: Check custom headers
+      const userHeader = req.headers.get('X-User-ID');
+      if (userHeader) {
+        userId = userHeader;
+        console.log(`Using userId from header: ${userId}`);
+      } else {
+        // Method 3: Try getUserOrSeed with request (less reliable)
+        try {
+          const user = await getUserOrSeed(req);
+          userId = user.id;
+          console.log(`Using userId from getUserOrSeed: ${userId}`);
+        } catch (error) {
+          console.log(`getUserOrSeed failed, using default: ${userId}`);
+        }
+      }
+    }
+
+    // Get user from database
+    const user = await prisma.user.findUnique({ 
+      where: { id: userId } 
+    });
+    
+    if (!user) {
+      throw new Error(`User ${userId} not found. Run: npm run db:seed`);
+    }
+    
+    console.log(`Join API: User ${user.displayName} (${user.id}) joining session ${sessionId}`);
 
     const result = await prisma.$transaction(async (tx: any) => {
       // Get session and validate
@@ -40,7 +80,7 @@ export async function POST(req: Request) {
         throw new Error("Session not found");
       }
 
-      console.log(`🎮 Session status: ${session.status}, Creator: ${session.creator.displayName} (${session.creatorId})`);
+      console.log(`Session status: ${session.status}, Creator: ${session.creator.displayName} (${session.creatorId})`);
 
       if (session.status !== "OPEN") {
         throw new Error("Session is not open for joining");
@@ -60,42 +100,60 @@ export async function POST(req: Request) {
         throw new Error(`Move count mismatch. Expected ${session.rounds} moves, got ${challengerMoves.length}`);
       }
 
-      console.log(`✅ ${user.displayName} joining ${session.creator.displayName}'s game`);
-
-      // Debit challenger's balance
-      await tx.user.update({ 
-        where: { id: user.id }, 
-        data: { mockBalance: { decrement: session.totalStake } } 
+      // Deduct challenger's stake
+      await tx.user.update({
+        where: { id: user.id },
+        data: { mockBalance: { decrement: session.totalStake } }
       });
 
-      // Parse creator moves from commit hash (for now, generate random moves as a placeholder)
-      // TODO: Replace with actual creator moves from commit-reveal when implementing Phase 2
-      const creatorMoves: Move[] = Array(session.rounds).fill(null).map(() => {
-        const moves: Move[] = ["R", "P", "S"];
-        return moves[Math.floor(Math.random() * 3)];
-      });
+      console.log(`Debited ${session.totalStake} tokens from ${user.displayName}`);
 
-      console.log(`🎮 Creator moves: ${creatorMoves.join(",")}, Challenger moves: ${challengerMoves.join(",")}`);
+      // GET ALICE'S ACTUAL MOVES - No more random!
+      let creatorMoves: Move[];
+      
+      if (session.creatorMoves) {
+        // Parse stored moves
+        try {
+          creatorMoves = typeof session.creatorMoves === 'string' 
+            ? JSON.parse(session.creatorMoves)
+            : session.creatorMoves;
+          
+          console.log(`Using Alice's actual moves: ${creatorMoves.join(',')}`);
+        } catch (error) {
+          console.error('Error parsing creator moves:', error);
+          throw new Error("Invalid creator moves stored in session");
+        }
+      } else {
+        // Fallback: If no moves stored, generate random (should not happen in production)
+        console.warn('⚠️ WARNING: No creator moves found, using random fallback');
+        creatorMoves = Array(session.rounds).fill(null).map(() => {
+          const moves: Move[] = ["R", "P", "S"];
+          return moves[Math.floor(Math.random() * 3)];
+        });
+      }
 
-      // AUTO-RESOLVE THE GAME IMMEDIATELY
-      const gameResult = tallyOutcome(creatorMoves, challengerMoves);
-      const { outcomes, aWins, bWins, draws, overall } = gameResult;
+      // Validate creator moves length
+      if (creatorMoves.length !== session.rounds) {
+        throw new Error(`Creator moves count mismatch. Expected ${session.rounds}, got ${creatorMoves.length}`);
+      }
 
-      console.log(`🎮 Game result: Creator ${aWins} - ${bWins} Challenger, Overall: ${overall}`);
+      console.log(`GAME RESOLUTION:`);
+      console.log(`- Creator (${session.creator.displayName}): ${creatorMoves.join(',')}`);
+      console.log(`- Challenger (${user.displayName}): ${challengerMoves.join(',')}`);
+
+      // Judge the game - Note: correct property names are aWins, bWins, not creatorWins/challengerWins
+      const outcome = tallyOutcome(creatorMoves, challengerMoves);
+      console.log(`Game outcome:`, outcome);
 
       // Calculate pot and payouts
-      const pot = session.totalStake * 2;
-      let winnerUserId: string | null = null;
-      let payoutWinner = 0;
-      let feesBurn = 0;
-      let feesTreasury = 0;
-      let feesDev = 0;
-      let feesWeeklyRewards = 0;
+      const pot = calcPot(session.rounds, session.stakePerRound);
+      const payout = payoutFromPot(pot);
+      
+      console.log(`Pot: ${pot}, Payouts:`, payout);
 
-      if (overall === "DRAW") {
-        // Draw: refund both players, no fees
-        console.log(`🤝 Draw - refunding both players ${session.totalStake} tokens`);
-        
+      // Update balances based on outcome
+      if (outcome.overall === 'DRAW') {
+        // Refund both players (no fees on draws)
         await tx.user.update({
           where: { id: session.creatorId },
           data: { mockBalance: { increment: session.totalStake } }
@@ -104,32 +162,17 @@ export async function POST(req: Request) {
           where: { id: user.id },
           data: { mockBalance: { increment: session.totalStake } }
         });
-        
-        payoutWinner = 0; // No winner payout on draw
+        console.log(`DRAW: Refunded both players`);
       } else {
-        // Someone won: calculate fees and payout
-        const payout = payoutFromPot(pot);
-        feesBurn = payout.feesBurn;
-        feesTreasury = payout.feesTreasury;
-        feesDev = payout.feesDev;
-        feesWeeklyRewards = payout.feesWeeklyRewards;
-        payoutWinner = payout.payoutWinner;
+        // Determine winner and pay out
+        const winnerId = outcome.overall === 'CREATOR' ? session.creatorId : user.id;
         
-        if (overall === "CREATOR") {
-          winnerUserId = session.creatorId;
-          console.log(`🎉 Creator won! Payout: ${payoutWinner} tokens`);
-          await tx.user.update({
-            where: { id: session.creatorId },
-            data: { mockBalance: { increment: payoutWinner } }
-          });
-        } else {
-          winnerUserId = user.id;
-          console.log(`🎉 Challenger won! Payout: ${payoutWinner} tokens`);
-          await tx.user.update({
-            where: { id: user.id },
-            data: { mockBalance: { increment: payoutWinner } }
-          });
-        }
+        await tx.user.update({
+          where: { id: winnerId },
+          data: { mockBalance: { increment: payout.payoutWinner } }
+        });
+        
+        console.log(`WINNER: ${winnerId === user.id ? user.displayName : session.creator.displayName} gets ${payout.payoutWinner}`);
       }
 
       // Update session to resolved
@@ -139,75 +182,107 @@ export async function POST(req: Request) {
           status: "RESOLVED",
           challengerId: user.id,
           challengerMoves: JSON.stringify(challengerMoves),
-          creatorMoves: JSON.stringify(creatorMoves),
-        },
-      });
-
-      // Create match result with proper fee tracking
-      const matchResult = await tx.matchResult.create({
-        data: {
-          sessionId,
-          roundsOutcome: JSON.stringify(outcomes),
-          creatorWins: aWins,
-          challengerWins: bWins,
-          draws,
-          overall,
-          pot,
-          feesBurn,
-          feesTreasury,
-          feesDev,
-          feesWeeklyRewards,
-          payoutWinner,
-          winnerUserId,
-          replaySeed: null,
+          resolvedAt: new Date()
         }
       });
 
+      // Create match result with correct property names
+      const matchResult = await tx.matchResult.create({
+        data: {
+          sessionId: session.id,
+          winnerUserId: outcome.overall === 'DRAW' ? null : 
+                       (outcome.overall === 'CREATOR' ? session.creatorId : user.id),
+          creatorWins: outcome.aWins,  // Correct property name from tallyOutcome
+          challengerWins: outcome.bWins, // Correct property name from tallyOutcome
+          draws: outcome.draws,
+          pot: pot,
+          payoutWinner: outcome.overall === 'DRAW' ? 0 : payout.payoutWinner,
+          payoutLoser: 0,
+          feeTotal: outcome.overall === 'DRAW' ? 0 : 
+                   (payout.feesTreasury + payout.feesBurn + payout.feesDev + payout.feesWeeklyRewards),
+          feeTreasury: outcome.overall === 'DRAW' ? 0 : payout.feesTreasury,
+          feeBurn: outcome.overall === 'DRAW' ? 0 : payout.feesBurn,
+          feeDev: outcome.overall === 'DRAW' ? 0 : payout.feesDev,
+          feeWeekly: outcome.overall === 'DRAW' ? 0 : payout.feesWeeklyRewards, // Correct property name
+          createdAt: new Date()
+        }
+      });
+
+      // Add weekly tracking if there's a winner
+      if (outcome.overall !== 'DRAW') {
+        const weekStart = getCurrentWeekStart();
+        
+        let weeklyPeriod = await tx.weeklyPeriod.findUnique({
+          where: { weekStart }
+        });
+        
+        if (!weeklyPeriod) {
+          const weekEnd = new Date(weekStart);
+          weekEnd.setUTCDate(weekStart.getUTCDate() + 7);
+          
+          weeklyPeriod = await tx.weeklyPeriod.create({
+            data: {
+              weekStart,
+              weekEnd,
+              totalRewardsPool: 0,
+              isDistributed: false
+            }
+          });
+        }
+
+        // Update weekly pool with fee
+        await tx.weeklyPeriod.update({
+          where: { id: weeklyPeriod.id },
+          data: { totalRewardsPool: { increment: payout.feesWeeklyRewards } }
+        });
+
+        console.log(`Added ${payout.feesWeeklyRewards} to weekly pool`);
+      }
+
+      // Fetch updated user balances
+      const updatedCreator = await tx.user.findUnique({ where: { id: session.creatorId } });
+      const updatedChallenger = await tx.user.findUnique({ where: { id: user.id } });
+
       return {
         session: updatedSession,
-        matchResult,
-        outcomes,
+        result: matchResult,
+        outcome,
+        payout,
         creatorMoves,
         challengerMoves,
-        isChallenger: true
+        updatedBalances: {
+          creator: updatedCreator?.mockBalance,
+          challenger: updatedChallenger?.mockBalance
+        }
       };
     });
 
-    // Get updated user balance
-    const updatedUser = await prisma.user.findUnique({ 
-      where: { id: user.id } 
-    });
+    console.log(`Game completed successfully`);
 
-    // Determine result for challenger's perspective
-    const didWin = result.matchResult.overall === "CHALLENGER";
-    const isDraw = result.matchResult.overall === "DRAW";
-    const balanceChange = isDraw ? 0 : (didWin ? result.matchResult.payoutWinner - result.session.totalStake : -result.session.totalStake);
-
-    console.log(`🎮 Final result for ${user.displayName}: ${didWin ? 'WIN' : isDraw ? 'DRAW' : 'LOSS'}, Balance change: ${balanceChange}`);
+    // Calculate pot for response (same calculation as inside transaction)
+    const totalPot = calcPot(result.session.rounds, result.session.stakePerRound);
 
     return NextResponse.json({
       success: true,
-      didWin,
-      isDraw,
-      balanceChange,
-      newBalance: updatedUser?.mockBalance || 0,
+      didWin: result.outcome.overall === 'CHALLENGER',
+      isDraw: result.outcome.overall === 'DRAW',
+      balanceChange: result.outcome.overall === 'DRAW' ? 0 : 
+                    (result.outcome.overall === 'CHALLENGER' ? result.payout.payoutWinner - result.session.totalStake : -result.session.totalStake),
+      newBalance: result.updatedBalances.challenger,
       creatorMoves: result.creatorMoves,
       challengerMoves: result.challengerMoves,
       matchResult: {
-        creatorWins: result.matchResult.creatorWins,
-        challengerWins: result.matchResult.challengerWins,
-        draws: result.matchResult.draws,
-        pot: result.matchResult.pot,
+        creatorWins: result.outcome.aWins,
+        challengerWins: result.outcome.bWins,
+        draws: result.outcome.draws,
+        pot: totalPot
       },
-      message: isDraw 
-        ? "It's a draw! Stakes refunded." 
-        : didWin 
-          ? `You won ${result.matchResult.payoutWinner} tokens!` 
-          : `You lost ${result.session.totalStake} tokens.`
+      message: result.outcome.overall === 'DRAW' ? 'Draw! Both players refunded.' :
+               result.outcome.overall === 'CHALLENGER' ? 'You won!' : 'You lost!'
     });
 
   } catch (error: any) {
-    console.error("❌ Join session error:", error);
+    console.error("Join session error:", error);
     return NextResponse.json({ 
       success: false,
       error: error.message || "Failed to join session" 

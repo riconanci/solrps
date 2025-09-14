@@ -1,4 +1,4 @@
-// app/lobby/page.tsx - Complete Enhanced Lobby with Filters and Manual Join
+// app/lobby/page.tsx - UPDATED WITH WORKING USER DETECTION & JOIN API
 "use client";
 import { useState, useEffect } from "react";
 import { useWallet } from "../../src/state/wallet";
@@ -60,25 +60,41 @@ export default function LobbyPage() {
   const [manualSessionId, setManualSessionId] = useState('');
   const [manualJoinLoading, setManualJoinLoading] = useState(false);
 
-  // Initialize wallet on mount
+  // ENHANCED WALLET INITIALIZATION - Force correct user detection
   useEffect(() => {
     const initializeWallet = async () => {
-      if (!wallet.isConnected) {
-        const urlParams = new URLSearchParams(window.location.search);
-        const userParam = urlParams.get('user') || 'alice';
-        const userId = userParam === 'alice' ? 'seed_alice' : 'seed_bob';
+      console.log('🎮 Initializing wallet...');
+      
+      // Force detect user from URL
+      const urlParams = new URLSearchParams(window.location.search);
+      const userParam = urlParams.get('user') || 'alice';
+      const targetUserId = userParam === 'alice' ? 'seed_alice' : 'seed_bob';
+      
+      console.log(`🎮 URL says user should be: ${userParam} (${targetUserId})`);
+      console.log(`🎮 Current wallet state:`, {
+        userId: wallet.userId,
+        displayName: wallet.displayName,
+        isConnected: wallet.isConnected
+      });
+      
+      // Force switch if needed
+      if (!wallet.isConnected || wallet.userId !== targetUserId) {
+        console.log(`🎮 Wallet needs switching from ${wallet.userId} to ${targetUserId}`);
         
         try {
-          await wallet.switchUser(userId);
+          await wallet.switchUser(targetUserId);
+          console.log(`✅ Wallet switched successfully to: ${wallet.displayName} (${wallet.userId})`);
         } catch (error) {
-          console.error('Failed to initialize wallet:', error);
+          console.error('❌ Failed to switch wallet:', error);
           setError('Failed to load wallet');
         }
+      } else {
+        console.log(`✅ Wallet already correct: ${wallet.displayName} (${wallet.userId})`);
       }
     };
 
     initializeWallet();
-  }, [wallet]);
+  }, []);
 
   // Load sessions when wallet is connected
   useEffect(() => {
@@ -109,13 +125,13 @@ export default function LobbyPage() {
       const data = await response.json();
       console.log('Sessions response:', data);
       
-      if (data.success && data.items) {
+      if (data.items) {
         // Filter to only open sessions that aren't created by current user
         const availableSessions = data.items.filter((session: Session) => 
           session.status === 'OPEN' && session.creatorId !== wallet.userId
         );
         
-        console.log('Available sessions for', wallet.displayName, ':', availableSessions);
+        console.log(`Available sessions for ${wallet.displayName}:`, availableSessions);
         setSessions(availableSessions);
       } else {
         setSessions([]);
@@ -610,7 +626,7 @@ function SessionCard({
   );
 }
 
-// Join Game Modal Component
+// ENHANCED JOIN GAME MODAL - Uses working join API
 function JoinGameModal({ 
   session, 
   wallet, 
@@ -649,12 +665,18 @@ function JoinGameModal({
     try {
       console.log('Joining game:', session.id, 'with moves:', moves);
       
+      // ENHANCED REQUEST - Include user info for proper detection
       const response = await fetch('/api/session/join', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-User-ID': wallet.userId || '',
+          'X-User-Name': wallet.displayName || ''
+        },
         body: JSON.stringify({
           sessionId: session.id,
-          challengerMoves: moves
+          challengerMoves: moves,
+          userId: wallet.userId, // Explicit user ID for API detection
         })
       });
 
