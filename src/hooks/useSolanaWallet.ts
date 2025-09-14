@@ -1,24 +1,18 @@
-// src/hooks/useSolanaWallet.ts - Enhanced wallet hook
-import { useConnection, useWallet } from '@solana/wallet-adapter-react';
-import { LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js';
-import { useEffect, useState } from 'react';
-import { getAccount, getAssociatedTokenAddress } from '@solana/spl-token';
+// src/hooks/useSolanaWallet.ts - Clean Solana Wallet Hook
+"use client";
+import { useEffect, useState, useCallback } from 'react';
+import { useWallet, useConnection } from '@solana/wallet-adapter-react';
+import { LAMPORTS_PER_SOL } from '@solana/web3.js';
 
 export interface SolanaWalletState {
-  // Wallet connection
   connected: boolean;
   connecting: boolean;
-  publicKey: PublicKey | null;
-  
-  // Balances
+  publicKey: any | null;
   solBalance: number;
   tokenBalance: number;
-  
-  // Status
   loading: boolean;
   error: string | null;
-  
-  // Functions
+  wallet: any | null;
   refreshBalances: () => Promise<void>;
   disconnect: () => Promise<void>;
 }
@@ -30,7 +24,6 @@ export const useSolanaWallet = (tokenMintAddress?: string): SolanaWalletState =>
     connected, 
     connecting, 
     disconnect,
-    sendTransaction,
     wallet
   } = useWallet();
   
@@ -40,56 +33,35 @@ export const useSolanaWallet = (tokenMintAddress?: string): SolanaWalletState =>
   const [error, setError] = useState<string | null>(null);
 
   // Fetch SOL balance
-  const fetchSolBalance = async () => {
-    if (!publicKey) return;
+  const fetchSolBalance = useCallback(async () => {
+    if (!publicKey || !connection) return;
     
     try {
       const balance = await connection.getBalance(publicKey);
       setSolBalance(balance / LAMPORTS_PER_SOL);
+      console.log('💰 SOL Balance:', balance / LAMPORTS_PER_SOL);
     } catch (err) {
       console.error('Error fetching SOL balance:', err);
       setError('Failed to fetch SOL balance');
     }
-  };
-
-  // Fetch token balance (if using custom SPL token)
-  const fetchTokenBalance = async () => {
-    if (!publicKey || !tokenMintAddress) return;
-    
-    try {
-      const tokenMint = new PublicKey(tokenMintAddress);
-      const tokenAccountAddress = await getAssociatedTokenAddress(
-        tokenMint,
-        publicKey
-      );
-      
-      const tokenAccount = await getAccount(connection, tokenAccountAddress);
-      setTokenBalance(Number(tokenAccount.amount));
-    } catch (err) {
-      // Token account might not exist - that's okay, balance is 0
-      setTokenBalance(0);
-    }
-  };
+  }, [publicKey, connection]);
 
   // Refresh all balances
-  const refreshBalances = async () => {
+  const refreshBalances = useCallback(async () => {
     if (!connected || !publicKey) return;
     
     setLoading(true);
     setError(null);
     
     try {
-      await Promise.all([
-        fetchSolBalance(),
-        fetchTokenBalance(),
-      ]);
+      await fetchSolBalance();
     } catch (err) {
       console.error('Error refreshing balances:', err);
       setError('Failed to refresh balances');
     } finally {
       setLoading(false);
     }
-  };
+  }, [connected, publicKey, fetchSolBalance]);
 
   // Auto-refresh balances when wallet connects
   useEffect(() => {
@@ -100,7 +72,7 @@ export const useSolanaWallet = (tokenMintAddress?: string): SolanaWalletState =>
       setTokenBalance(0);
       setError(null);
     }
-  }, [connected, publicKey, tokenMintAddress]);
+  }, [connected, publicKey, refreshBalances]);
 
   return {
     connected,
@@ -110,6 +82,7 @@ export const useSolanaWallet = (tokenMintAddress?: string): SolanaWalletState =>
     tokenBalance,
     loading,
     error,
+    wallet,
     refreshBalances,
     disconnect,
   };

@@ -1,6 +1,6 @@
-// src/components/SolanaWalletProvider.tsx - COMPLETE REWRITE: Fixed Connection Issues (ORIGINAL: ~45 lines → ENHANCED: ~180+ lines)
+// src/components/SolanaWalletProvider.tsx - Clean Solana Wallet Provider
 "use client";
-import React, { FC, ReactNode, useMemo, useCallback } from 'react';
+import React, { FC, ReactNode, useMemo, useCallback, useEffect } from 'react';
 import {
   ConnectionProvider,
   WalletProvider,
@@ -31,7 +31,7 @@ interface WalletError {
 export const SolanaWalletProvider: FC<Props> = ({ children }) => {
   console.log('🔗 Initializing SolanaWalletProvider...');
 
-  // Network configuration with validation
+  // Network configuration
   const network = useMemo(() => {
     const clusterEnv = process.env.NEXT_PUBLIC_SOLANA_CLUSTER;
     let networkValue: WalletAdapterNetwork;
@@ -57,40 +57,22 @@ export const SolanaWalletProvider: FC<Props> = ({ children }) => {
     return networkValue;
   }, []);
 
-  // RPC endpoint with comprehensive fallback strategy
+  // RPC endpoint configuration
   const endpoint = useMemo(() => {
     const customRPC = process.env.NEXT_PUBLIC_SOLANA_RPC_URL;
     const defaultRPC = clusterApiUrl(network);
-    
-    // List of backup RPC endpoints for each network
-    const backupEndpoints = {
-      [WalletAdapterNetwork.Devnet]: [
-        'https://api.devnet.solana.com',
-        'https://rpc.ankr.com/solana_devnet',
-        'https://devnet.helius-rpc.com/?api-key=demo',
-      ],
-      [WalletAdapterNetwork.Mainnet]: [
-        'https://api.mainnet-beta.solana.com',
-        'https://rpc.ankr.com/solana',
-      ],
-      [WalletAdapterNetwork.Testnet]: [
-        'https://api.testnet.solana.com',
-      ],
-    };
-    
     const finalEndpoint = customRPC || defaultRPC;
     
     console.log('🌐 RPC Configuration:', {
       customRPC,
       defaultRPC,
       finalEndpoint,
-      availableBackups: backupEndpoints[network].length,
     });
     
     return finalEndpoint;
   }, [network]);
 
-  // Initialize wallet adapters with comprehensive error handling
+  // Initialize wallet adapters
   const wallets = useMemo(() => {
     console.log('💰 Initializing wallet adapters...');
     
@@ -116,7 +98,6 @@ export const SolanaWalletProvider: FC<Props> = ({ children }) => {
       }
       
       console.log(`✅ Total wallet adapters initialized: ${adapters.length}`);
-      console.log('📝 Available wallets:', adapters.map(w => w.name));
       
       if (adapters.length === 0) {
         console.error('❌ No wallet adapters could be initialized!');
@@ -134,47 +115,73 @@ export const SolanaWalletProvider: FC<Props> = ({ children }) => {
   const handleWalletError = useCallback((error: WalletError) => {
     console.error('🚨 Wallet operation error:', error);
     
-    // Categorize errors for better user experience
-    if (error.name === 'WalletNotConnectedError') {
-      console.log('ℹ️ Wallet not connected - this is normal for initial state');
-      return;
+    // Enhanced error categorization
+    switch (error.name) {
+      case 'WalletNotConnectedError':
+        console.log('ℹ️ Wallet not connected - this is normal for initial state');
+        break;
+      case 'WalletConnectionError':
+        console.log('🔄 Wallet connection failed - user may have rejected or wallet unavailable');
+        console.log('💡 Make sure you have Phantom or Solflare extension installed');
+        break;
+      case 'WalletDisconnectedError':
+        console.log('ℹ️ Wallet disconnected - user initiated or wallet closed');
+        break;
+      case 'WalletNotReadyError':
+        console.log('⏳ Wallet not ready - extension may still be loading');
+        break;
+      case 'WalletNotInstalledError':
+        console.log('📦 Wallet not installed - please install Phantom or Solflare extension');
+        break;
+      default:
+        console.error('❌ Unexpected wallet error:', {
+          name: error.name,
+          message: error.message,
+          code: error.code,
+        });
+        break;
     }
-    
-    if (error.name === 'WalletConnectionError') {
-      console.log('🔄 Wallet connection failed - user may have rejected or wallet unavailable');
-      return;
-    }
-    
-    if (error.name === 'WalletDisconnectedError') {
-      console.log('ℹ️ Wallet disconnected - user initiated or wallet closed');
-      return;
-    }
-    
-    // Log unexpected errors for debugging
-    console.error('❌ Unexpected wallet error:', {
-      name: error.name,
-      message: error.message,
-      code: error.code,
-    });
   }, []);
 
   // Connection provider configuration
   const connectionConfig = useMemo(() => ({
     commitment: 'confirmed' as const,
-    confirmTransactionInitialTimeout: 60000, // 60 seconds
+    confirmTransactionInitialTimeout: 60000,
     disableRetryOnRateLimit: false,
-    httpHeaders: {
-      'User-Agent': 'SolRPS/1.0',
-    },
   }), []);
 
   // Wallet provider configuration
   const walletConfig = useMemo(() => ({
     wallets,
-    autoConnect: true, // Enable auto-connect for better UX
+    autoConnect: false, // Manual connection for better UX
     onError: handleWalletError,
-    localStorageKey: 'solrps-wallet-adapter', // Consistent storage key
+    localStorageKey: 'solrps-wallet-adapter',
   }), [wallets, handleWalletError]);
+
+  // Debug wallet detection on mount
+  useEffect(() => {
+    console.log('🔍 Checking for installed wallets...');
+    
+    if (typeof window !== 'undefined') {
+      const windowAny = window as any;
+      
+      if (windowAny.phantom?.solana?.isPhantom) {
+        console.log('✅ Phantom wallet detected');
+      } else {
+        console.log('❌ Phantom wallet not detected');
+      }
+      
+      if (windowAny.solflare?.isSolflare) {
+        console.log('✅ Solflare wallet detected');
+      } else {
+        console.log('❌ Solflare wallet not detected');
+      }
+      
+      if (!windowAny.phantom?.solana && !windowAny.solflare) {
+        console.log('⚠️ No Solana wallets detected. Please install Phantom or Solflare.');
+      }
+    }
+  }, []);
 
   // Log final configuration
   console.log('⚙️ Final wallet provider configuration:', {
@@ -182,7 +189,6 @@ export const SolanaWalletProvider: FC<Props> = ({ children }) => {
     network,
     walletsCount: wallets.length,
     autoConnect: walletConfig.autoConnect,
-    storageKey: walletConfig.localStorageKey,
     commitment: connectionConfig.commitment,
   });
 
@@ -190,15 +196,32 @@ export const SolanaWalletProvider: FC<Props> = ({ children }) => {
   if (wallets.length === 0) {
     console.error('❌ Cannot render wallet provider: No wallets available');
     
-    // Fallback error UI
     return (
       <div className="min-h-screen flex items-center justify-center bg-neutral-950 text-neutral-100">
         <div className="text-center space-y-4 p-6">
           <div className="text-6xl">⚠️</div>
           <h2 className="text-xl font-bold">Wallet System Error</h2>
           <p className="text-gray-400 max-w-md">
-            No wallet adapters could be loaded. Please refresh the page or check your internet connection.
+            No wallet adapters could be loaded. Please refresh the page or install a Solana wallet extension.
           </p>
+          <div className="space-y-2">
+            <a 
+              href="https://phantom.app/" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="block px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors"
+            >
+              Install Phantom Wallet
+            </a>
+            <a 
+              href="https://solflare.com/" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="block px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors"
+            >
+              Install Solflare Wallet
+            </a>
+          </div>
           <button
             onClick={() => window.location.reload()}
             className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
@@ -226,24 +249,7 @@ export const SolanaWalletProvider: FC<Props> = ({ children }) => {
   );
 };
 
-// Component to monitor wallet connection status (development only)
+// Component to monitor wallet connection events
 function WalletConnectionMonitor({ children }: { children: ReactNode }) {
-  // Only include monitoring in development
-  if (process.env.NODE_ENV !== 'development') {
-    return <>{children}</>;
-  }
-
-  return (
-    <>
-      {children}
-      <WalletDebugMonitor />
-    </>
-  );
-}
-
-// Development-only debug monitor
-function WalletDebugMonitor() {
-  // This would include the debug component we created earlier
-  // For now, just return null to avoid circular imports
-  return null;
+  return <>{children}</>;
 }
