@@ -1,6 +1,4 @@
-// app/api/me/matches/route.ts
-// ONLY API route code - limit to 9 most recent matches + auto cleanup
-
+// app/api/me/matches/route.ts - UPDATED TO EXCLUDE CANCELLED MATCHES
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "../../../../src/lib/db";
 import { getUserOrSeed } from "../../_utils";
@@ -19,8 +17,9 @@ export async function GET(req: NextRequest) {
     const me = await getUserOrSeed(req);
     
     // Get only the 9 most recent sessions for this user + auto cleanup in transaction
+    // EXCLUDE CANCELLED matches from both cleanup and display
     const result = await prisma.$transaction(async (tx: any) => {
-      // First get all sessions for this user to identify old ones
+      // First get all sessions for this user to identify old ones (EXCLUDING CANCELLED)
       const allUserSessions = await tx.session.findMany({
         where: {
           OR: [
@@ -28,7 +27,7 @@ export async function GET(req: NextRequest) {
             { challengerId: me.id }
           ],
           status: {
-            in: ['RESOLVED', 'AWAITING_REVEAL', 'FORFEITED', 'CANCELLED']
+            in: ['RESOLVED', 'AWAITING_REVEAL', 'FORFEITED'] // REMOVED 'CANCELLED'
           }
         },
         orderBy: {
@@ -59,7 +58,7 @@ export async function GET(req: NextRequest) {
         });
       }
 
-      // Now get the 9 most recent sessions with full data
+      // Now get the 9 most recent sessions with full data (EXCLUDING CANCELLED)
       const sessions = await tx.session.findMany({
         where: {
           OR: [
@@ -67,7 +66,7 @@ export async function GET(req: NextRequest) {
             { challengerId: me.id }
           ],
           status: {
-            in: ['RESOLVED', 'AWAITING_REVEAL', 'FORFEITED', 'CANCELLED']
+            in: ['RESOLVED', 'AWAITING_REVEAL', 'FORFEITED'] // REMOVED 'CANCELLED'
           }
         },
         include: {
@@ -88,7 +87,7 @@ export async function GET(req: NextRequest) {
       return sessions;
     });
 
-    console.log(`📊 Found ${result.length} recent matches for ${me.displayName} (after cleanup)`);
+    console.log(`📊 Found ${result.length} recent matches for ${me.displayName} (after cleanup, excluding cancelled)`);
 
     // Transform sessions to match data format
     const matches = result.map((session: any) => {

@@ -1,4 +1,4 @@
-// app/leaderboard/page.tsx - COMPLETE REWRITE WITH WEEKLY REWARDS + ENHANCED FILTERS
+// app/leaderboard/page.tsx - COMPLETE FINAL REWRITE - FIXED WEEKLY MATCHES COUNT
 "use client";
 import { useEffect, useState } from "react";
 import { useWallet } from "../../src/state/wallet";
@@ -11,6 +11,15 @@ type WeeklyReward = {
   weekDisplay: string;
 };
 
+type WeeklyPlayer = {
+  userId: string;
+  displayName: string;
+  points: number;
+  totalWinnings: number;
+  matchesWon: number;
+  matchesPlayed: number;
+};
+
 type WeeklyRewardsData = {
   currentPeriod: {
     id: string;
@@ -19,16 +28,16 @@ type WeeklyRewardsData = {
     totalMatches: number;
     isDistributed: boolean;
   } | null;
-  weeklyLeaderboard: {
-    userId: string;
-    displayName: string;
-    points: number;
-    totalWinnings: number;
-    matchesWon: number;
-  }[];
+  weeklyLeaderboard: WeeklyPlayer[];
   claimableRewards: WeeklyReward[];
   recentlyClaimed: any[];
   totalClaimableAmount: number;
+  stats: {
+    totalPlayers: number;
+    eligiblePlayers: number;
+    ineligiblePlayers: number;
+    blockRate: number;
+  } | null;
 };
 
 type LeaderboardEntry = {
@@ -81,7 +90,7 @@ export default function LeaderboardPage() {
       const res = await fetch(`/api/leaderboard?timeframe=${tf}`);
       if (!res.ok) throw new Error("Failed to fetch leaderboard");
       const leaderboardData = await res.json();
-      console.log("Leaderboard data:", leaderboardData); // Debug log
+      console.log("Leaderboard data:", leaderboardData);
       setData(leaderboardData);
     } catch (err: any) {
       setError(err.message);
@@ -104,9 +113,7 @@ export default function LeaderboardPage() {
       const result = await res.json();
       
       if (res.ok) {
-        // Update wallet balance
         wallet.setBalance(result.newBalance);
-        // Refresh leaderboard data
         fetchLeaderboard(timeframe);
         alert(result.message);
       } else {
@@ -118,6 +125,18 @@ export default function LeaderboardPage() {
       setClaiming(null);
     }
   }
+
+  // Calculate total weekly matches played from leaderboard data
+  const calculateWeeklyMatchesPlayed = () => {
+    if (!data?.weeklyRewards?.weeklyLeaderboard) return 0;
+    
+    // Sum all matches played and divide by 2 (since each match involves 2 players)
+    const totalParticipations = data.weeklyRewards.weeklyLeaderboard.reduce((sum, player) => {
+      return sum + (player.matchesPlayed || 0);
+    }, 0);
+    
+    return Math.floor(totalParticipations / 2);
+  };
 
   if (loading) {
     return (
@@ -159,11 +178,10 @@ export default function LeaderboardPage() {
     <div className="min-h-screen bg-slate-900 text-white p-4 md:p-8">
       <div className="max-w-6xl mx-auto space-y-8">
         
-        {/* Header */}
+        {/* Header with Timeframe Selector */}
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
           <h1 className="text-3xl font-bold">🏆 Leaderboard</h1>
           
-          {/* ENHANCED Timeframe selector with Weekly Rewards Badge */}
           <div className="flex gap-2 flex-wrap">
             {[
               { 
@@ -206,7 +224,6 @@ export default function LeaderboardPage() {
                   <span>{option.icon}</span>
                   <span>{option.label}</span>
                   
-                  {/* Special badge for weekly rewards */}
                   {option.isSpecial && option.badge && (
                     <span className={`
                       absolute -top-1 -right-1 px-2 py-0.5 text-xs font-bold rounded-full text-white
@@ -216,7 +233,6 @@ export default function LeaderboardPage() {
                     </span>
                   )}
                   
-                  {/* Prize pool indicator for active selection */}
                   {option.isSpecial && timeframe === option.value && data?.weeklyRewards?.currentPeriod && (
                     <span className="text-xs bg-black/20 px-2 py-1 rounded-full">
                       {data.weeklyRewards.currentPeriod.totalRewardsPool.toLocaleString()} 🎁
@@ -224,7 +240,6 @@ export default function LeaderboardPage() {
                   )}
                 </div>
                 
-                {/* Tooltip on hover */}
                 <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-10">
                   {option.description}
                   {option.isSpecial && data?.weeklyRewards?.currentPeriod && (
@@ -236,7 +251,6 @@ export default function LeaderboardPage() {
               </button>
             ))}
             
-            {/* Weekly Competition Status Indicator */}
             {data?.weeklyRewards?.currentPeriod && timeframe === "week" && (
               <div className="flex items-center gap-2 px-3 py-2 bg-black/20 rounded-lg border border-gray-600">
                 <div className="flex items-center gap-1 text-sm">
@@ -248,7 +262,25 @@ export default function LeaderboardPage() {
           </div>
         </div>
 
-        {/* Weekly Competition Quick Stats Bar (only show when week is selected) */}
+        {/* Stats Summary */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="bg-white/5 rounded-xl p-4 text-center">
+            <div className="text-2xl font-bold text-blue-400">{data.totalPlayers}</div>
+            <div className="text-gray-400">Total Players</div>
+          </div>
+          <div className="bg-white/5 rounded-xl p-4 text-center">
+            <div className="text-2xl font-bold text-green-400">{data.totalMatches}</div>
+            <div className="text-gray-400">Total Matches</div>
+          </div>
+          <div className="bg-white/5 rounded-xl p-4 text-center">
+            <div className="text-2xl font-bold text-purple-400">
+              {data.leaderboard.reduce((sum, entry) => sum + entry.totalWinnings, 0).toLocaleString()}
+            </div>
+            <div className="text-gray-400">Total Winnings</div>
+          </div>
+        </div>
+
+        {/* Weekly Competition Quick Stats - FIXED THE MATCHES PLAYED COUNT */}
         {timeframe === "week" && data?.weeklyRewards?.currentPeriod && (
           <div className="bg-gradient-to-r from-purple-500/10 via-blue-500/10 to-green-500/10 rounded-xl p-4 border border-purple-500/20">
             <div className="flex items-center justify-between flex-wrap gap-4">
@@ -262,9 +294,10 @@ export default function LeaderboardPage() {
                 
                 <div className="text-center">
                   <div className="text-lg font-bold text-blue-400">
-                    {data.weeklyRewards.currentPeriod.totalMatches}
+                    {/* FIXED: Calculate matches played from weekly leaderboard data */}
+                    {calculateWeeklyMatchesPlayed()}
                   </div>
-                  <div className="text-xs text-gray-400">Games Played</div>
+                  <div className="text-xs text-gray-400">Matches Played</div>
                 </div>
                 
                 <div className="text-center">
@@ -284,14 +317,12 @@ export default function LeaderboardPage() {
                   {data.weeklyRewards.currentPeriod.isDistributed ? "📊 Distributed" : "⚡ Active Competition"}
                 </span>
                 
-                {/* Time indicator */}
                 <span className="text-gray-400 text-xs">
                   {data.weeklyRewards.currentPeriod.weekDisplay}
                 </span>
               </div>
             </div>
             
-            {/* Reward breakdown preview */}
             {!data.weeklyRewards.currentPeriod.isDistributed && data.weeklyRewards.currentPeriod.totalRewardsPool > 0 && (
               <div className="mt-3 pt-3 border-t border-gray-700">
                 <div className="flex items-center gap-4 text-xs text-gray-400">
@@ -305,16 +336,15 @@ export default function LeaderboardPage() {
           </div>
         )}
 
-        {/* WEEKLY REWARDS SECTION */}
+        {/* Weekly Rewards Section */}
         {data.weeklyRewards && (
           <div className="space-y-6">
-            {/* Current Week Info */}
+            
+            {/* Current Week Info (when not on week tab) */}
             {data.weeklyRewards.currentPeriod && timeframe !== "week" && (
               <div className="bg-gradient-to-r from-purple-500/20 to-blue-500/20 rounded-xl p-6 border border-purple-500/30">
                 <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-xl font-bold text-purple-400">
-                    🎯 Weekly Competition
-                  </h2>
+                  <h2 className="text-xl font-bold text-purple-400">🎯 Weekly Competition</h2>
                   <div className="text-sm text-gray-400">
                     {data.weeklyRewards.currentPeriod.weekDisplay}
                   </div>
@@ -330,7 +360,7 @@ export default function LeaderboardPage() {
                   
                   <div className="bg-black/20 rounded-lg p-4 text-center">
                     <div className="text-2xl font-bold text-blue-400">
-                      {data.weeklyRewards.currentPeriod.totalMatches}
+                      {calculateWeeklyMatchesPlayed()}
                     </div>
                     <div className="text-sm text-gray-400">Matches Played</div>
                   </div>
@@ -348,20 +378,14 @@ export default function LeaderboardPage() {
             {/* Claimable Rewards */}
             {data.weeklyRewards.claimableRewards && data.weeklyRewards.claimableRewards.length > 0 && (
               <div className="bg-green-500/20 rounded-xl p-6 border border-green-500/30">
-                <h3 className="text-xl font-bold text-green-400 mb-4">
-                  💰 Claimable Weekly Rewards
-                </h3>
+                <h3 className="text-xl font-bold text-green-400 mb-4">💰 Claimable Weekly Rewards</h3>
                 
                 <div className="space-y-3">
                   {data.weeklyRewards.claimableRewards.map((reward) => (
                     <div key={reward.id} className="flex items-center justify-between bg-black/20 rounded-lg p-4">
                       <div>
-                        <div className="font-bold">
-                          #{reward.rank} Place - {reward.weekDisplay}
-                        </div>
-                        <div className="text-sm text-gray-400">
-                          {reward.points} points earned
-                        </div>
+                        <div className="font-bold">#{reward.rank} Place - {reward.weekDisplay}</div>
+                        <div className="text-sm text-gray-400">{reward.points} points earned</div>
                       </div>
                       
                       <div className="flex items-center gap-3">
@@ -391,7 +415,7 @@ export default function LeaderboardPage() {
               </div>
             )}
 
-            {/* Weekly Leaderboard */}
+            {/* This Week's Top Players */}
             {data.weeklyRewards.weeklyLeaderboard && data.weeklyRewards.weeklyLeaderboard.length > 0 && (
               <div className="bg-slate-800 rounded-xl p-6">
                 <h3 className="text-xl font-bold mb-4">📊 This Week's Top Players</h3>
@@ -406,15 +430,22 @@ export default function LeaderboardPage() {
                         <div>
                           <div className="font-medium">{player.displayName}</div>
                           <div className="text-sm text-gray-400">
-                            {player.matchesWon} wins • {player.totalWinnings.toLocaleString()} tokens
+                            <span className="text-green-400">{player.matchesWon || 0} wins</span>
+                            <span className="mx-1">•</span>
+                            <span className="text-yellow-400 font-bold">{player.matchesPlayed || 0} played</span>
+                            <span className="mx-1">•</span>
+                            <span className="text-blue-400">{(player.totalWinnings || 0).toLocaleString()} tokens</span>
                           </div>
                         </div>
                       </div>
                       
                       <div className="text-right">
-                        <div className="font-bold text-purple-400">
-                          {player.points} points
-                        </div>
+                        <div className="font-bold text-purple-400">{player.points || 0} points</div>
+                        {player.matchesPlayed > 0 && (
+                          <div className="text-xs text-gray-400">
+                            {Math.round((player.matchesWon / player.matchesPlayed) * 100)}% win rate
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -424,7 +455,7 @@ export default function LeaderboardPage() {
           </div>
         )}
 
-        {/* REGULAR LEADERBOARD */}
+        {/* Main Overall Rankings Table */}
         <div className="bg-slate-800 rounded-xl p-6">
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-xl font-bold">📈 Overall Rankings</h2>
@@ -513,7 +544,7 @@ function LeaderboardRow({
       </td>
       
       <td className="px-6 py-4 text-right">
-        <div className="font-mono">{entry.matchesPlayed}</div>
+        <div className="font-mono font-bold text-yellow-400">{entry.matchesPlayed}</div>
       </td>
       
       <td className="px-6 py-4 text-right">

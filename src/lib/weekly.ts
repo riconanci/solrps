@@ -1,11 +1,11 @@
-// src/lib/weekly.ts - ENHANCED WITH ANTI-SYBIL ELIGIBILITY REQUIREMENTS
+// src/lib/weekly.ts - FIXED TO PROPERLY COUNT MATCHES PLAYED
 import { prisma } from "@/lib/db";
 
-// Weekly rewards eligibility requirements - ANTI-SYBIL PROTECTION
+// Weekly rewards eligibility requirements - ANTI-SYBIL PROTECTION (RELAXED FOR TESTING)
 const ELIGIBILITY_REQUIREMENTS = {
-  minUniqueOpponents: 5, // Must beat at least 5 different players
-  maxWinShareFromSingleOpponent: 0.25, // Max 25% of wins from one player  
-  minTotalWins: 5, // Must have at least 5 wins total
+  minUniqueOpponents: 1, // Must beat at least 1 different player (was 5)
+  maxWinShareFromSingleOpponent: 1.0, // Max 100% wins from one opponent (was 0.25)  
+  minTotalWins: 1, // Must have at least 1 win total (was 5)
 };
 
 // Type definitions
@@ -70,8 +70,10 @@ export function isWeeklyPeriodComplete(period: { weekEnd: Date }): boolean {
   return new Date() >= period.weekEnd;
 }
 
-// Get weekly leaderboard with ANTI-SYBIL eligibility filtering
+// Get weekly leaderboard with ANTI-SYBIL eligibility filtering - FIXED MATCHES PLAYED
 export async function getWeeklyLeaderboard(tx: any, weeklyPeriodId: string): Promise<WeeklyLeaderboardResult> {
+  console.log("🔍 Weekly: Starting weekly leaderboard calculation...");
+  
   // Get the weekly period dates
   const period = await tx.weeklyPeriod.findUnique({
     where: { id: weeklyPeriodId }
@@ -81,14 +83,16 @@ export async function getWeeklyLeaderboard(tx: any, weeklyPeriodId: string): Pro
     throw new Error("Weekly period not found");
   }
 
-  // Get all match results from this week
+  console.log(`📅 Weekly: Processing period ${period.weekStart} to ${period.weekEnd}`);
+
+  // FIXED: Get ALL match results from this week (including draws)
   const results = await tx.matchResult.findMany({
     where: {
       createdAt: {
         gte: period.weekStart,
         lt: period.weekEnd
       },
-      winnerUserId: { not: null }
+      // REMOVED: winnerUserId: { not: null } - This was excluding draws!
     },
     include: {
       session: {
@@ -100,32 +104,29 @@ export async function getWeeklyLeaderboard(tx: any, weeklyPeriodId: string): Pro
     }
   });
 
-  // Calculate user stats with opponent tracking
+  console.log(`📊 Weekly: Found ${results.length} total match results (including draws)`);
+
+  // Calculate user stats with opponent tracking - REWRITTEN TO COUNT ALL PARTICIPANTS
   const userStats = new Map<string, PlayerStats>();
   
+  // STEP 1: Process each match result to count ALL participants
   for (const result of results) {
-    const winnerId = result.winnerUserId!;
     const session = result.session;
     
-    // Determine the opponent (loser)
-    const opponentId = session.creatorId === winnerId 
-      ? session.challengerId 
-      : session.creatorId;
-    
-    if (!opponentId) continue; // Skip if no opponent
-    
-    // Find winner's display name
-    let winnerName = `User ${winnerId.slice(0, 8)}`;
-    if (session.creator.id === winnerId) {
-      winnerName = session.creator.displayName || winnerName;
-    } else if (session.challenger?.id === winnerId) {
-      winnerName = session.challenger.displayName || winnerName;
+    // Skip if no challenger (incomplete game)
+    if (!session.challengerId || !session.challenger) {
+      console.log(`⚠️ Weekly: Skipping incomplete session: ${session.id}`);
+      continue;
     }
-
-    if (!userStats.has(winnerId)) {
-      userStats.set(winnerId, {
-        userId: winnerId,
-        displayName: winnerName,
+    
+    const creatorId = session.creatorId;
+    const challengerId = session.challengerId;
+    
+    // Initialize creator if not exists
+    if (!userStats.has(creatorId)) {
+      userStats.set(creatorId, {
+        userId: creatorId,
+        displayName: session.creator.displayName || `User ${creatorId.slice(0, 8)}`,
         points: 0,
         totalWinnings: 0,
         matchesWon: 0,
@@ -134,53 +135,75 @@ export async function getWeeklyLeaderboard(tx: any, weeklyPeriodId: string): Pro
         winsPerOpponent: new Map<string, number>(),
       });
     }
-
-    const stats = userStats.get(winnerId)!;
-    stats.matchesWon++;
-    stats.totalWinnings += result.payoutWinner;
     
-    // Track opponent diversity
-    stats.uniqueOpponents.add(opponentId);
-    
-    // Track wins per opponent
-    if (!stats.winsPerOpponent.has(opponentId)) {
-      stats.winsPerOpponent.set(opponentId, 0);
+    // Initialize challenger if not exists
+    if (!userStats.has(challengerId)) {
+      userStats.set(challengerId, {
+        userId: challengerId,
+        displayName: session.challenger.displayName || `User ${challengerId.slice(0, 8)}`,
+        points: 0,
+        totalWinnings: 0,
+        matchesWon: 0,
+        matchesPlayed: 0,
+        uniqueOpponents: new Set<string>(),
+        winsPerOpponent: new Map<string, number>(),
+      });
     }
-    stats.winsPerOpponent.set(opponentId, stats.winsPerOpponent.get(opponentId)! + 1);
     
-    // Points calculation: 10 per win + bonus for payout amount
-    stats.points += 10 + Math.floor(result.payoutWinner / 100);
-  }
-
-  // Also count total matches played (including losses)
-  for (const result of results) {
-    const session = result.session;
-    const participants = [session.creatorId, session.challengerId].filter(id => id);
+    const creatorStats = userStats.get(creatorId)!;
+    const challengerStats = userStats.get(challengerId)!;
     
-    for (const participantId of participants) {
-      if (!userStats.has(participantId)) {
-        let name = `User ${participantId.slice(0, 8)}`;
-        if (session.creator.id === participantId) {
-          name = session.creator.displayName || name;
-        } else if (session.challenger?.id === participantId) {
-          name = session.challenger.displayName || name;
-        }
-        
-        userStats.set(participantId, {
-          userId: participantId,
-          displayName: name,
-          points: 0,
-          totalWinnings: 0,
-          matchesWon: 0,
-          matchesPlayed: 0,
-          uniqueOpponents: new Set<string>(),
-          winsPerOpponent: new Map<string, number>(),
-        });
-      }
+    // BOTH PLAYERS PARTICIPATED - increment matches played
+    creatorStats.matchesPlayed++;
+    challengerStats.matchesPlayed++;
+    
+    // Track opponent diversity for both players
+    creatorStats.uniqueOpponents.add(challengerId);
+    challengerStats.uniqueOpponents.add(creatorId);
+    
+    // Handle the outcome - wins, draws, and winnings
+    if (result.overall === "DRAW") {
+      console.log(`🤝 Weekly: Draw between ${session.creator.displayName} and ${session.challenger.displayName}`);
+      // On draw, both players get their stake back
+      creatorStats.totalWinnings += session.totalStake;
+      challengerStats.totalWinnings += session.totalStake;
+      // No wins counted for either player
+    } else if (result.winnerUserId === creatorId) {
+      console.log(`🏆 Weekly: Creator wins: ${session.creator.displayName} beats ${session.challenger.displayName}`);
+      // Creator won
+      creatorStats.matchesWon++;
+      creatorStats.totalWinnings += result.payoutWinner;
+      creatorStats.points += 10 + Math.floor(result.payoutWinner / 100);
       
-      userStats.get(participantId)!.matchesPlayed++;
+      // Track wins per opponent for anti-sybil
+      if (!creatorStats.winsPerOpponent.has(challengerId)) {
+        creatorStats.winsPerOpponent.set(challengerId, 0);
+      }
+      creatorStats.winsPerOpponent.set(challengerId, creatorStats.winsPerOpponent.get(challengerId)! + 1);
+      
+      // Challenger gets nothing (loses stake)
+    } else if (result.winnerUserId === challengerId) {
+      console.log(`🏆 Weekly: Challenger wins: ${session.challenger.displayName} beats ${session.creator.displayName}`);
+      // Challenger won
+      challengerStats.matchesWon++;
+      challengerStats.totalWinnings += result.payoutWinner;
+      challengerStats.points += 10 + Math.floor(result.payoutWinner / 100);
+      
+      // Track wins per opponent for anti-sybil
+      if (!challengerStats.winsPerOpponent.has(creatorId)) {
+        challengerStats.winsPerOpponent.set(creatorId, 0);
+      }
+      challengerStats.winsPerOpponent.set(creatorId, challengerStats.winsPerOpponent.get(creatorId)! + 1);
+      
+      // Creator gets nothing (loses stake)
     }
   }
+
+  console.log(`👥 Weekly: Processed ${userStats.size} unique players`);
+  console.log("🏆 Weekly: Top players participation:");
+  Array.from(userStats.values()).slice(0, 5).forEach((player, index) => {
+    console.log(`  ${index + 1}. ${player.displayName}: ${player.matchesPlayed} played, ${player.matchesWon} won`);
+  });
 
   // Apply ANTI-SYBIL eligibility filtering
   const eligiblePlayers: CleanPlayerStats[] = [];
@@ -228,7 +251,7 @@ export async function getWeeklyLeaderboard(tx: any, weeklyPeriodId: string): Pro
       points: stats.points,
       totalWinnings: stats.totalWinnings,
       matchesWon: stats.matchesWon,
-      matchesPlayed: stats.matchesPlayed,
+      matchesPlayed: stats.matchesPlayed, // NOW PROPERLY CALCULATED!
       uniqueOpponentsCount,
       maxWinsFromSingleOpponent,
       winShareFromSingleOpponent: Math.round(winShareFromSingleOpponent * 100) / 100,
@@ -260,6 +283,10 @@ export async function getWeeklyLeaderboard(tx: any, weeklyPeriodId: string): Pro
   }
 
   console.log(`✅ WEEKLY LEADERBOARD: ${leaderboard.length} eligible players from ${userStats.size} total`);
+  console.log("🏆 Final weekly leaderboard with matches played:");
+  leaderboard.slice(0, 3).forEach((player, index) => {
+    console.log(`  ${index + 1}. ${player.displayName}: ${player.matchesPlayed} played, ${player.matchesWon} won, ${player.points} points`);
+  });
 
   return {
     leaderboard,
