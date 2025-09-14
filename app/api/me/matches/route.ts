@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
       // If user has more than 9 sessions, delete the old ones beyond 9 most recent
       if (allUserSessions.length > 9) {
         const sessionsToDelete = allUserSessions.slice(9); // Keep first 9, delete rest
-        const sessionIdsToDelete = sessionsToDelete.map(s => s.id);
+        const sessionIdsToDelete = sessionsToDelete.map((session: { id: string }) => session.id);
         
         console.log(`🧹 Auto-cleanup: Removing ${sessionIdsToDelete.length} old sessions for ${me.displayName}`);
         
