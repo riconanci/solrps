@@ -1,4 +1,4 @@
-// src/components/Navigation.tsx - Fixed with Proper Wallet Initialization
+// src/components/Navigation.tsx - Fixed with Proper Wallet Initialization + WALLET BUTTON SPACING FIX
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -326,7 +326,7 @@ function WalletDisplay({
         </div>
       );
     } else {
-      // Not connected - show connect interface
+      // Not connected - show connect interface WITH FIXED SPACING ✅
       return (
         <div className="flex items-center gap-3">
           {/* Status */}
@@ -339,12 +339,22 @@ function WalletDisplay({
             </div>
           </div>
           
-          {/* Connect Button */}
+          {/* Connect Button - FIXED VERSION ✅ */}
           {WalletMultiButton ? (
-            <WalletMultiButton className="!bg-blue-500 !hover:bg-blue-600 !text-white !px-4 !py-2 !text-sm !rounded-lg" />
+            <WalletMultiButton 
+              className="!bg-blue-500 !hover:bg-blue-600 !text-white !px-4 !py-2 !text-sm !rounded-lg !flex !items-center !gap-1 !justify-center !whitespace-nowrap"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+                justifyContent: 'center',
+                whiteSpace: 'nowrap',
+                minWidth: 'auto'
+              }}
+            />
           ) : (
             <button
-              className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 text-sm rounded-lg transition-colors"
+              className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 text-sm rounded-lg transition-colors flex items-center gap-1"
               onClick={onConnect}
             >
               Connect Wallet
@@ -457,12 +467,27 @@ function MobileWalletDisplay({
               <div className="text-sm text-blue-400 mb-2">Connect your Solana wallet</div>
             </div>
             
-            <button
-              onClick={onConnect}
-              className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 text-sm rounded-lg transition-colors w-full"
-            >
-              Connect Wallet
-            </button>
+            {/* FIXED MOBILE WALLET BUTTON ✅ */}
+            {WalletMultiButton ? (
+              <WalletMultiButton 
+                className="!bg-blue-500 !hover:bg-blue-600 !text-white !px-4 !py-2 !text-sm !rounded-lg !w-full !flex !items-center !gap-1 !justify-center !whitespace-nowrap"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.25rem',
+                  justifyContent: 'center',
+                  whiteSpace: 'nowrap',
+                  width: '100%'
+                }}
+              />
+            ) : (
+              <button
+                onClick={onConnect}
+                className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 text-sm rounded-lg transition-colors w-full flex items-center gap-1 justify-center"
+              >
+                Connect Wallet
+              </button>
+            )}
           </div>
         )}
       </div>
