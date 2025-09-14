@@ -1,4 +1,4 @@
-// app/my/page.tsx - EXACT ORIGINAL GITHUB FORMAT with 9 match limit
+// app/my/page.tsx - UPDATED WITH BLUE BACKGROUND CONSISTENCY
 "use client";
 import { useEffect, useState } from "react";
 import { useWallet } from "../../src/state/wallet";
@@ -200,7 +200,7 @@ export default function MyMatchesPage() {
     }
   };
 
-  // Match card component - ORIGINAL EMOJI GRID FORMAT
+  // Match card component
   const MatchCard = ({ match, isRecent }: { match: MatchData; isRecent: boolean }) => {
     const [currentRoundStart, setCurrentRoundStart] = useState(0);
     const maxVisibleRounds = 3; // Show max 3 rounds at a time
@@ -246,7 +246,7 @@ export default function MyMatchesPage() {
           </div>
         </div>
 
-        {/* Moves display - ORIGINAL EMOJI GRID FORMAT */}
+        {/* Moves display */}
         {match.result && match.myMoves && match.opponentMoves && (
           <div className="bg-white/5 rounded-lg p-3 mb-3">
             <div className="flex items-center justify-between mb-2">
@@ -279,7 +279,7 @@ export default function MyMatchesPage() {
               )}
             </div>
             
-            {/* ORIGINAL FORMAT: Two rows of emoji grids */}
+            {/* Two rows of emoji grids */}
             <div className="space-y-2">
               {/* You row */}
               <div className="flex items-center gap-2">
@@ -306,7 +306,7 @@ export default function MyMatchesPage() {
               </div>
             </div>
 
-            {/* Score display - ORIGINAL FORMAT */}
+            {/* Score display */}
             <div className="flex justify-center mt-3">
               <div className="text-sm text-gray-300">
                 Score: {match.result.myWins}-{match.result.opponentWins}
@@ -322,7 +322,7 @@ export default function MyMatchesPage() {
           </div>
         )}
 
-        {/* Result section - ORIGINAL FORMAT */}
+        {/* Result section */}
         <div className="text-center">
           {match.result ? (
             <>
@@ -361,7 +361,7 @@ export default function MyMatchesPage() {
 
   if (loading) {
     return (
-      <div className="max-w-6xl mx-auto p-6">
+      <div className="max-w-7xl mx-auto p-6 min-h-screen bg-slate-900 text-white">
         <div className="text-center py-12">
           <div className="text-lg text-gray-400">Loading matches...</div>
         </div>
@@ -371,7 +371,7 @@ export default function MyMatchesPage() {
 
   if (error) {
     return (
-      <div className="max-w-6xl mx-auto p-6">
+      <div className="max-w-7xl mx-auto p-6 min-h-screen bg-slate-900 text-white">
         <div className="text-center py-12">
           <div className="text-red-400 text-lg">Error: {error}</div>
           <button 
@@ -386,14 +386,14 @@ export default function MyMatchesPage() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto p-6 space-y-6">
+    <div className="max-w-7xl mx-auto p-6 space-y-6 min-h-screen bg-slate-900 text-white">
       {/* Header */}
       <div className="text-center">
-        <h1 className="text-3xl font-bold mb-2">My Matches</h1>
+        <h1 className="text-3xl font-bold mb-2">📊 My Matches</h1>
         <p className="text-gray-400">Your Rock Paper Scissors battle history</p>
       </div>
 
-      {/* Stats Section */}
+      {/* Stats Section - BLUE BACKGROUND ADDED */}
       <div className="bg-slate-800 rounded-xl p-6">
         <h2 className="text-xl font-semibold mb-4">📊 Statistics</h2>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
@@ -414,8 +414,7 @@ export default function MyMatchesPage() {
             <div className="text-xs text-gray-400">Win Rate</div>
           </div>
           <div className="text-center">
-            <div className={`text-2xl font-bold ${stats.netAmount >= 0 ? 
-              'text-green-400' : 'text-red-400'}`}>
+            <div className={`text-2xl font-bold ${stats.netAmount >= 0 ? 'text-green-400' : 'text-red-400'}`}>
               {stats.netAmount >= 0 ? '+' : ''}{stats.netAmount.toLocaleString()}
             </div>
             <div className="text-xs text-gray-400">Net RPS</div>
@@ -427,9 +426,9 @@ export default function MyMatchesPage() {
         </div>
       </div>
 
-      {/* Matches Grid */}
-      <div className="space-y-4">
-        <h2 className="text-xl font-semibold">🎮 Recent Matches</h2>
+      {/* Matches Section - BLUE BACKGROUND ADDED */}
+      <div className="bg-slate-800 rounded-xl p-6">
+        <h2 className="text-xl font-semibold mb-4">🎮 Recent Matches</h2>
         
         {matches.length === 0 ? (
           <div className="text-center py-12 text-gray-400">
