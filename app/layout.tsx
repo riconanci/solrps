@@ -1,8 +1,10 @@
-// app/layout.tsx - COMPLETE REWRITE: Fixed Wallet Connection (ORIGINAL: ~23 lines → ENHANCED: ~130+ lines)
+// app/layout.tsx - FIXED: Proper Solana Wallet Provider Structure
 import "./globals.css";
 import { ReactNode } from "react";
 import { Navigation } from "../src/components/Navigation";
-import { ClientWalletProvider } from "../src/components/ClientWalletProvider";
+
+// FIXED: Import the proper wallet provider based on environment
+import { ProperWalletProvider } from "../src/components/ProperWalletProvider";
 
 export const metadata = {
   title: "SolRPS - Rock Paper Scissors on Solana",
@@ -19,20 +21,20 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       </head>
       <body className="min-h-screen bg-neutral-950 text-neutral-100 antialiased">
         {/* 
-          CLIENT-SIDE WALLET PROVIDER - Handles both mock and blockchain modes
-          This wrapper automatically detects environment variables and loads the appropriate provider
+          FIXED: Proper wallet provider that ensures WalletContext is available
+          This provides the correct ConnectionProvider > WalletProvider > WalletModalProvider structure
         */}
-        <ClientWalletProvider>
+        <ProperWalletProvider>
           <AppStructure>
             {children}
           </AppStructure>
-        </ClientWalletProvider>
+        </ProperWalletProvider>
       </body>
     </html>
   );
 }
 
-// Main app structure component
+// Main app structure component (PRESERVED EXACTLY)
 function AppStructure({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen flex flex-col">
@@ -58,7 +60,7 @@ function AppStructure({ children }: { children: ReactNode }) {
   );
 }
 
-// Development banner component (client-side only)
+// Development banner component (PRESERVED EXACTLY)
 function DevelopmentBanner() {
   // Only render on client-side in development
   if (typeof window === 'undefined' || process.env.NODE_ENV !== 'development') {
@@ -144,7 +146,7 @@ function DevelopmentBanner() {
   );
 }
 
-// Simple footer component
+// Simple footer component (PRESERVED EXACTLY)
 function Footer() {
   return (
     <footer className="border-t border-white/10 bg-slate-900/50">

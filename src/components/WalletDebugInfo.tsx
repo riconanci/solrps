@@ -1,10 +1,10 @@
-// src/components/WalletDebugInfo.tsx - COMPLETE REWRITE: Fixed TypeScript Errors (ORIGINAL: 0 lines → ENHANCED: ~400+ lines)
+// src/components/WalletDebugInfo.tsx - FIXED: Proper Wallet Context Handling
 "use client";
 import { useState, useEffect } from 'react';
 import { useGameWallet } from '../hooks/useGameWallet';
 import { APP_CONFIG } from '../config/constants';
 
-// Only import wallet hooks when blockchain mode is enabled
+// FIXED: Safe wallet adapter imports with proper error handling
 let useWallet: any = null;
 let useConnection: any = null;
 
@@ -13,8 +13,9 @@ if (typeof window !== 'undefined' && process.env.NEXT_PUBLIC_USE_BLOCKCHAIN === 
     const walletAdapter = require('@solana/wallet-adapter-react');
     useWallet = walletAdapter.useWallet;
     useConnection = walletAdapter.useConnection;
+    console.log('✅ WalletDebugInfo: Wallet adapter hooks loaded successfully');
   } catch (error) {
-    console.warn('Wallet adapter not available for debug component');
+    console.warn('⚠️ WalletDebugInfo: Wallet adapter not available:', error);
   }
 }
 
@@ -59,7 +60,7 @@ function DebugPanel({ onClose }: { onClose: () => void }) {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
 
-  // Get Solana wallet info if available
+  // FIXED: Safe wallet info retrieval with proper error handling
   let solanaWallet: any = null;
   let connection: any = null;
   
@@ -68,9 +69,12 @@ function DebugPanel({ onClose }: { onClose: () => void }) {
       solanaWallet = useWallet();
       const connectionHook = useConnection();
       connection = connectionHook.connection;
+      console.log('✅ WalletDebugInfo: Successfully accessed wallet hooks');
     } catch (error) {
-      console.warn('Failed to get wallet/connection hooks:', error);
+      console.warn('⚠️ WalletDebugInfo: Failed to get wallet/connection hooks:', error);
     }
+  } else {
+    console.log('ℹ️ WalletDebugInfo: Wallet hooks not available (expected in mock mode)');
   }
 
   // Refresh debug info
@@ -177,6 +181,28 @@ function DebugPanel({ onClose }: { onClose: () => void }) {
             🔄
           </button>
           <button
+            onClick={logDebugInfo}
+            className="text-gray-400 hover:text-white p-1 rounded transition-colors"
+            title="Log to console"
+          >
+            📝
+          </button>
+          <button
+            onClick={testConnection}
+            className={`p-1 rounded transition-colors ${
+              connectionTest === 'testing' ? 'text-yellow-400' :
+              connectionTest === 'success' ? 'text-green-400' :
+              connectionTest === 'error' ? 'text-red-400' :
+              'text-gray-400 hover:text-white'
+            }`}
+            title="Test RPC connection"
+            disabled={connectionTest === 'testing'}
+          >
+            {connectionTest === 'testing' ? '⏳' : 
+             connectionTest === 'success' ? '✅' :
+             connectionTest === 'error' ? '❌' : '🔗'}
+          </button>
+          <button
             onClick={onClose}
             className="text-gray-400 hover:text-white p-1 rounded transition-colors"
           >
@@ -195,19 +221,22 @@ function DebugPanel({ onClose }: { onClose: () => void }) {
             }`}></div>
             <span>{gameWallet.connected ? 'Connected' : 'Disconnected'}</span>
           </div>
-          <div className="text-gray-400">|</div>
-          <div>{gameWallet.walletType.toUpperCase()}</div>
-          {gameWallet.balance !== undefined && (
-            <>
-              <div className="text-gray-400">|</div>
-              <div className="text-green-400">{gameWallet.balance.toLocaleString()} RPS</div>
-            </>
-          )}
+          <div className="text-gray-400">
+            {gameWallet.walletType === 'solana' ? '🔗 Solana' : '📱 Mock'}
+          </div>
         </div>
+
+        {/* Connection Error */}
+        {connectionError && (
+          <div className="p-2 bg-red-900/20 border border-red-500/30 rounded text-red-300 text-xs">
+            <div className="font-medium">Connection Error:</div>
+            <div className="mt-1">{connectionError}</div>
+          </div>
+        )}
 
         {/* Debug Sections */}
         {debugSections.map((section) => (
-          <DebugSectionComponent
+          <DebugSection
             key={section.title}
             section={section}
             expanded={expandedSections.has(section.title)}
@@ -222,66 +251,27 @@ function DebugPanel({ onClose }: { onClose: () => void }) {
             }}
           />
         ))}
-
-        {/* Action Buttons */}
-        <div className="flex gap-2 pt-2 border-t border-gray-700">
-          <button
-            onClick={logDebugInfo}
-            className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded text-xs font-medium transition-colors"
-          >
-            📋 Log Info
-          </button>
-          
-          <button
-            onClick={testConnection}
-            disabled={connectionTest === 'testing' || !connection}
-            className={`flex-1 px-3 py-2 rounded text-xs font-medium transition-all ${
-              connectionTest === 'testing' 
-                ? 'bg-yellow-600 text-white cursor-wait'
-                : connectionTest === 'success'
-                ? 'bg-green-600 text-white'
-                : connectionTest === 'error'
-                ? 'bg-red-600 text-white'
-                : 'bg-purple-600 hover:bg-purple-700 text-white'
-            }`}
-          >
-            {connectionTest === 'testing' ? '🔄 Testing...' : 
-             connectionTest === 'success' ? '✅ Success' :
-             connectionTest === 'error' ? '❌ Failed' : '🧪 Test RPC'}
-          </button>
-        </div>
-
-        {/* Connection Error Display */}
-        {connectionError && (
-          <div className="p-2 bg-red-900/20 border border-red-500/30 rounded text-red-300 text-xs">
-            <div className="font-medium">Connection Error:</div>
-            <div className="mt-1 break-words">{connectionError}</div>
-          </div>
-        )}
       </div>
     </div>
   );
 }
 
-// Debug section component
-function DebugSectionComponent({ 
+function DebugSection({ 
   section, 
   expanded, 
   onToggle 
 }: { 
-  section: DebugSection;
-  expanded: boolean;
+  section: DebugSection; 
+  expanded: boolean; 
   onToggle: () => void;
 }) {
   return (
     <div className="border border-gray-700 rounded">
       <button
         onClick={onToggle}
-        className="w-full flex items-center justify-between p-2 hover:bg-gray-800 transition-colors text-left"
+        className="w-full p-2 text-left bg-gray-800 hover:bg-gray-750 transition-colors flex items-center justify-between"
       >
-        <span className={`font-semibold ${section.color} text-xs`}>
-          {section.title}
-        </span>
+        <span className={`font-medium ${section.color}`}>{section.title}</span>
         <span className="text-gray-400 text-xs">
           {expanded ? '▼' : '▶'}
         </span>
@@ -298,7 +288,7 @@ function DebugSectionComponent({
   );
 }
 
-// Helper functions to gather debug information
+// FIXED: Helper functions with proper error handling
 function getEnvironmentInfo() {
   return {
     NODE_ENV: process.env.NODE_ENV,
@@ -351,7 +341,8 @@ function getSolanaWalletInfo(solanaWallet: any) {
   } catch (error) {
     return {
       available: false,
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: error instanceof Error ? error.message : 'Unknown error',
+      context: 'Error accessing wallet properties'
     };
   }
 }
@@ -374,7 +365,8 @@ function getConnectionInfo(connection: any) {
   } catch (error) {
     return {
       available: false,
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: error instanceof Error ? error.message : 'Unknown error',
+      context: 'Error accessing connection properties'
     };
   }
 }
@@ -405,21 +397,11 @@ function getAvailableWallets() {
       detected: !!windowAny.glow,
       connected: windowAny.glow?.isConnected || false,
     },
-    solana: {
-      detected: !!windowAny.solana,
-      isPhantom: windowAny.solana?.isPhantom || false,
-      connected: windowAny.solana?.isConnected || false,
-    },
-    coinbase: {
-      detected: !!windowAny.coinbaseSolana,
-      connected: windowAny.coinbaseSolana?.isConnected || false,
-    },
     totalDetected: [
       windowAny.phantom?.solana?.isPhantom,
       windowAny.solflare?.isSolflare,
       windowAny.backpack?.isBackpack,
       windowAny.glow,
-      windowAny.coinbaseSolana,
     ].filter(Boolean).length,
   };
 }
@@ -439,11 +421,6 @@ function getBrowserInfo() {
     windowSize: {
       width: window.innerWidth,
       height: window.innerHeight,
-    },
-    screen: {
-      width: window.screen.width,
-      height: window.screen.height,
-      colorDepth: window.screen.colorDepth,
     },
     localStorage: typeof Storage !== 'undefined',
     webgl: !!window.WebGLRenderingContext,

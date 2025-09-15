@@ -1,15 +1,16 @@
-// src/components/Navigation.tsx - Fixed with Proper Wallet Initialization + WALLET BUTTON SPACING FIX
+// src/components/Navigation.tsx - FIXED: TypeScript Errors + Better Wallet UX
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, useEffect, useCallback } from "react";
-import { useWallet, useMockWalletInitialization } from "../state/wallet";
+import { useWallet as useMockWallet, useMockWalletInitialization } from "../state/wallet";
 import { useGameWallet, useIsPhase2 } from "../hooks/useGameWallet";
 import { WalletDebugInfo } from "./WalletDebugInfo";
 
 // Safe conditional import with proper error handling
 let WalletMultiButton: any = null;
 let WalletDisconnectButton: any = null;
+let useSolanaWallet: any = null;
 
 if (typeof window !== 'undefined') {
   try {
@@ -20,6 +21,13 @@ if (typeof window !== 'undefined') {
         WalletDisconnectButton = walletUI.WalletDisconnectButton;
       }).catch(error => {
         console.warn('Wallet adapter UI not available:', error);
+      });
+      
+      // Import Solana wallet hook for improved UX
+      import('@solana/wallet-adapter-react').then(walletAdapter => {
+        useSolanaWallet = walletAdapter.useWallet;
+      }).catch(error => {
+        console.warn('Wallet adapter hooks not available:', error);
       });
     }
   } catch (error) {
@@ -38,12 +46,16 @@ interface NavItem {
 
 export function Navigation() {
   const pathname = usePathname();
-  const mockWallet = useWallet();
+  const mockWallet = useMockWallet();
   const gameWallet = useGameWallet();
   const isPhase2 = useIsPhase2();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [claimableCount, setClaimableCount] = useState(0);
   const [devRewardsAvailable, setDevRewardsAvailable] = useState(false);
+  
+  // IMPROVED: Track wallet selection state for better UX
+  const [walletSelectionOpen, setWalletSelectionOpen] = useState(false);
+  const [showWalletInstructions, setShowWalletInstructions] = useState(false);
   
   // Initialize mock wallet from URL parameters
   useMockWalletInitialization();
@@ -116,18 +128,54 @@ export function Navigation() {
     return () => clearInterval(interval);
   }, []);
 
-  // Wallet connection handlers
+  // IMPROVED: Better wallet connection state management
+  useEffect(() => {
+    if (isBlockchain && isPhase2Enabled) {
+      // Monitor for wallet selection state changes
+      const checkWalletState = () => {
+        const modalElement = document.querySelector('.wallet-adapter-modal');
+        const isModalOpen = modalElement && !modalElement.classList.contains('wallet-adapter-modal-fade-out');
+        
+        if (isModalOpen && !walletSelectionOpen) {
+          setWalletSelectionOpen(true);
+          setShowWalletInstructions(true);
+          console.log('🎯 Wallet selection modal opened');
+        } else if (!isModalOpen && walletSelectionOpen) {
+          setWalletSelectionOpen(false);
+          
+          // Show instructions for a few seconds after modal closes
+          setTimeout(() => {
+            setShowWalletInstructions(false);
+          }, 3000);
+          console.log('🎯 Wallet selection modal closed');
+        }
+      };
+      
+      const observer = new MutationObserver(checkWalletState);
+      observer.observe(document.body, { childList: true, subtree: true });
+      
+      return () => observer.disconnect();
+    }
+  }, [isBlockchain, isPhase2Enabled, walletSelectionOpen]);
+
+  // Enhanced wallet connection handlers
   const handleWalletConnect = useCallback(() => {
-    console.log('Manual wallet connection triggered');
-    // Connection is handled by WalletMultiButton when available
+    console.log('🔗 Manual wallet connection triggered');
+    setShowWalletInstructions(true);
+    
+    // Auto-hide instructions after 5 seconds
+    setTimeout(() => {
+      setShowWalletInstructions(false);
+    }, 5000);
   }, []);
 
   const handleWalletDisconnect = useCallback(async () => {
-    console.log('Manual wallet disconnection triggered');
+    console.log('🔌 Manual wallet disconnection triggered');
     try {
       if (gameWallet.disconnect) {
         await gameWallet.disconnect();
       }
+      setShowWalletInstructions(false);
     } catch (error) {
       console.error('Error disconnecting wallet:', error);
     }
@@ -135,6 +183,29 @@ export function Navigation() {
 
   return (
     <nav className="bg-slate-800 border-b border-white/10 sticky top-0 z-50 shadow-lg">
+      {/* IMPROVED: Wallet instruction banner */}
+      {showWalletInstructions && isBlockchain && isPhase2Enabled && !gameWallet.connected && (
+        <div className="bg-blue-600/20 border-b border-blue-500/30 px-4 py-2">
+          <div className="max-w-6xl mx-auto">
+            <div className="flex items-center gap-3 text-sm">
+              <span className="text-blue-400">💡</span>
+              <span className="text-blue-200">
+                {walletSelectionOpen 
+                  ? "Select your wallet type (Phantom recommended), then click Connect again to complete the connection."
+                  : "Click 'Connect Wallet' to select your wallet type, then click again to connect."
+                }
+              </span>
+              <button 
+                onClick={() => setShowWalletInstructions(false)}
+                className="text-blue-400 hover:text-blue-300 ml-auto"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
       <div className="max-w-6xl mx-auto px-4">
         <div className="flex items-center justify-between h-16">
           
@@ -193,13 +264,14 @@ export function Navigation() {
 
           {/* Wallet Section */}
           <div className="hidden md:flex items-center gap-4">
-            <WalletDisplay 
+            <ImprovedWalletDisplay 
               isBlockchain={isBlockchain}
               isPhase2Enabled={isPhase2Enabled}
               mockWallet={mockWallet}
               gameWallet={gameWallet}
               onConnect={handleWalletConnect}
               onDisconnect={handleWalletDisconnect}
+              showInstructions={showWalletInstructions}
             />
           </div>
 
@@ -252,13 +324,14 @@ export function Navigation() {
 
             {/* Mobile Wallet Section */}
             <div className="border-t border-white/10 pt-4 px-4">
-              <MobileWalletDisplay 
+              <ImprovedMobileWalletDisplay 
                 isBlockchain={isBlockchain}
                 isPhase2Enabled={isPhase2Enabled}
                 mockWallet={mockWallet}
                 gameWallet={gameWallet}
                 onConnect={handleWalletConnect}
                 onDisconnect={handleWalletDisconnect}
+                showInstructions={showWalletInstructions}
               />
             </div>
           </div>
@@ -271,19 +344,29 @@ export function Navigation() {
   );
 }
 
-// Wallet Display Component
-function WalletDisplay({ 
+// IMPROVED: Enhanced Wallet Display Component with Better UX
+function ImprovedWalletDisplay({ 
   isBlockchain, 
   isPhase2Enabled, 
   mockWallet, 
   gameWallet, 
   onConnect, 
-  onDisconnect 
-}: any) {
+  onDisconnect,
+  showInstructions
+}: {
+  isBlockchain: boolean;
+  isPhase2Enabled: boolean;
+  mockWallet: any;
+  gameWallet: any;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  showInstructions: boolean;
+}) {
   
   if (isBlockchain && isPhase2Enabled) {
     const isConnected = gameWallet?.connected;
     const publicKey = gameWallet?.publicKey;
+    const isConnecting = gameWallet?.connecting;
     
     if (isConnected && publicKey) {
       return (
@@ -291,12 +374,12 @@ function WalletDisplay({
           {/* Status Indicator */}
           <div className="flex items-center gap-2">
             <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
-            <span className="text-xs text-green-400 font-medium">LIVE</span>
+            <span className="text-xs text-green-400 font-medium">CONNECTED</span>
           </div>
           
           {/* Wallet Info */}
           <div className="text-right">
-            <div className="text-xs text-gray-400">Connected</div>
+            <div className="text-xs text-gray-400">Wallet</div>
             <div className="text-sm font-mono text-blue-400">
               {publicKey.slice(0, 4)}...{publicKey.slice(-4)}
             </div>
@@ -313,11 +396,11 @@ function WalletDisplay({
           {/* Disconnect Button */}
           <div className="flex gap-2">
             {WalletDisconnectButton ? (
-              <WalletDisconnectButton className="!bg-red-500 !hover:bg-red-600 !text-white !px-3 !py-1 !text-xs !rounded-lg" />
+              <WalletDisconnectButton className="!bg-red-500 !hover:bg-red-600 !text-white !px-3 !py-1 !text-xs !rounded-lg !flex !items-center !gap-1 !justify-center !whitespace-nowrap" />
             ) : (
               <button
                 onClick={onDisconnect}
-                className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 text-xs rounded-lg transition-colors"
+                className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 text-xs rounded-lg transition-colors flex items-center gap-1"
               >
                 Disconnect
               </button>
@@ -326,7 +409,7 @@ function WalletDisplay({
         </div>
       );
     } else {
-      // Not connected - show connect interface WITH FIXED SPACING ✅
+      // Not connected - show enhanced connect interface
       return (
         <div className="flex items-center gap-3">
           {/* Status */}
@@ -335,31 +418,48 @@ function WalletDisplay({
               🔗 BLOCKCHAIN MODE
             </div>
             <div className="text-xs text-blue-400">
-              Connect Wallet!
+              {isConnecting ? 'Connecting...' : 'Ready to Connect!'}
             </div>
           </div>
           
-          {/* Connect Button - FIXED VERSION ✅ */}
-          {WalletMultiButton ? (
-            <WalletMultiButton 
-              className="!bg-blue-500 !hover:bg-blue-600 !text-white !px-4 !py-2 !text-sm !rounded-lg !flex !items-center !gap-1 !justify-center !whitespace-nowrap"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.25rem',
-                justifyContent: 'center',
-                whiteSpace: 'nowrap',
-                minWidth: 'auto'
-              }}
-            />
-          ) : (
-            <button
-              className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 text-sm rounded-lg transition-colors flex items-center gap-1"
-              onClick={onConnect}
-            >
-              Connect Wallet
-            </button>
-          )}
+          {/* Enhanced Connect Button */}
+          <div className="relative">
+            {WalletMultiButton ? (
+              <WalletMultiButton 
+                className="!bg-blue-500 !hover:bg-blue-600 !text-white !px-4 !py-2 !text-sm !rounded-lg !flex !items-center !gap-1 !justify-center !whitespace-nowrap !transition-all"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.25rem',
+                  justifyContent: 'center',
+                  whiteSpace: 'nowrap',
+                  minWidth: 'auto'
+                }}
+                onClick={onConnect}
+              />
+            ) : (
+              <button
+                className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 text-sm rounded-lg transition-colors flex items-center gap-1"
+                onClick={onConnect}
+              >
+                Connect Wallet
+              </button>
+            )}
+            
+            {/* Instruction tooltip */}
+            {showInstructions && (
+              <div className="absolute top-full mt-2 left-0 w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 z-50">
+                <div className="flex items-start gap-2">
+                  <span className="text-blue-400">💡</span>
+                  <div>
+                    <div className="font-medium text-blue-300 mb-1">Two-Step Process:</div>
+                    <div>1. Click to select wallet type</div>
+                    <div>2. Click again to connect</div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       );
     }
@@ -417,19 +517,29 @@ function WalletDisplay({
   );
 }
 
-// Mobile Wallet Display Component
-function MobileWalletDisplay({ 
+// IMPROVED: Enhanced Mobile Wallet Display Component
+function ImprovedMobileWalletDisplay({ 
   isBlockchain, 
   isPhase2Enabled, 
   mockWallet, 
   gameWallet, 
   onConnect, 
-  onDisconnect 
-}: any) {
+  onDisconnect,
+  showInstructions
+}: {
+  isBlockchain: boolean;
+  isPhase2Enabled: boolean;
+  mockWallet: any;
+  gameWallet: any;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  showInstructions: boolean;
+}) {
   
   if (isBlockchain && isPhase2Enabled) {
     const isConnected = gameWallet?.connected;
     const publicKey = gameWallet?.publicKey;
+    const isConnecting = gameWallet?.connecting;
     
     return (
       <div>
@@ -464,10 +574,26 @@ function MobileWalletDisplay({
         ) : (
           <div className="space-y-3">
             <div className="text-center">
-              <div className="text-sm text-blue-400 mb-2">Connect your Solana wallet</div>
+              <div className="text-sm text-blue-400 mb-2">
+                {isConnecting ? 'Connecting to your wallet...' : 'Connect your Solana wallet'}
+              </div>
             </div>
             
-            {/* FIXED MOBILE WALLET BUTTON ✅ */}
+            {/* Enhanced instruction for mobile */}
+            {showInstructions && (
+              <div className="p-3 bg-blue-900/20 border border-blue-500/30 rounded-lg text-xs text-blue-200">
+                <div className="flex items-start gap-2">
+                  <span className="text-blue-400">💡</span>
+                  <div>
+                    <div className="font-medium text-blue-300 mb-1">Two-Step Process:</div>
+                    <div>1. Tap to select wallet type</div>
+                    <div>2. Tap again to connect</div>
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* Enhanced Mobile Connect Button */}
             {WalletMultiButton ? (
               <WalletMultiButton 
                 className="!bg-blue-500 !hover:bg-blue-600 !text-white !px-4 !py-2 !text-sm !rounded-lg !w-full !flex !items-center !gap-1 !justify-center !whitespace-nowrap"
@@ -479,13 +605,14 @@ function MobileWalletDisplay({
                   whiteSpace: 'nowrap',
                   width: '100%'
                 }}
+                onClick={onConnect}
               />
             ) : (
               <button
                 onClick={onConnect}
                 className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 text-sm rounded-lg transition-colors w-full flex items-center gap-1 justify-center"
               >
-                Connect Wallet
+                {isConnecting ? 'Connecting...' : 'Connect Wallet'}
               </button>
             )}
           </div>
@@ -494,7 +621,7 @@ function MobileWalletDisplay({
     );
   }
 
-  // Mobile Mock Mode
+  // Mobile Mock Mode (preserved exactly)
   return (
     <div>
       <div className="text-xs text-blue-400 font-bold mb-2 flex items-center gap-2">
