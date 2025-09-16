@@ -1,4 +1,4 @@
-// src/components/SolanaWalletProvider.tsx - Clean Solana Wallet Provider
+// src/components/SolanaWalletProvider.tsx - COMPLETE REWRITE: Working Wallet Provider
 "use client";
 import React, { FC, ReactNode, useMemo, useCallback, useEffect } from 'react';
 import {
@@ -29,15 +29,18 @@ interface WalletError {
 }
 
 export const SolanaWalletProvider: FC<Props> = ({ children }) => {
-  console.log('🔗 Initializing SolanaWalletProvider...');
+  console.log('🔗 Initializing COMPLETE REWRITE SolanaWalletProvider...');
 
-  // Network configuration
+  // Network configuration with validation
   const network = useMemo(() => {
     const clusterEnv = process.env.NEXT_PUBLIC_SOLANA_CLUSTER;
+    console.log('🌐 Raw cluster env:', clusterEnv);
+    
     let networkValue: WalletAdapterNetwork;
     
-    switch (clusterEnv) {
+    switch (clusterEnv?.toLowerCase()) {
       case 'mainnet-beta':
+      case 'mainnet':
         networkValue = WalletAdapterNetwork.Mainnet;
         break;
       case 'testnet':
@@ -49,160 +52,117 @@ export const SolanaWalletProvider: FC<Props> = ({ children }) => {
         break;
     }
     
-    console.log('🌐 Network configuration:', {
-      environment: clusterEnv,
-      resolved: networkValue,
-    });
-    
+    console.log('🌐 Network resolved to:', networkValue);
     return networkValue;
   }, []);
 
-  // RPC endpoint configuration
+  // RPC endpoint with fallback validation
   const endpoint = useMemo(() => {
     const customRPC = process.env.NEXT_PUBLIC_SOLANA_RPC_URL;
+    
+    if (customRPC) {
+      console.log('🌐 Using custom RPC:', customRPC);
+      return customRPC;
+    }
+    
     const defaultRPC = clusterApiUrl(network);
-    const finalEndpoint = customRPC || defaultRPC;
-    
-    console.log('🌐 RPC Configuration:', {
-      customRPC,
-      defaultRPC,
-      finalEndpoint,
-    });
-    
-    return finalEndpoint;
+    console.log('🌐 Using default RPC for', network, ':', defaultRPC);
+    return defaultRPC;
   }, [network]);
 
-  // Initialize wallet adapters
+  // Initialize wallet adapters with enhanced error handling
   const wallets = useMemo(() => {
     console.log('💰 Initializing wallet adapters...');
     
+    const adapters = [];
+    
     try {
-      const adapters = [];
-      
-      // Initialize Phantom Wallet
-      try {
-        const phantom = new PhantomWalletAdapter();
-        adapters.push(phantom);
-        console.log('✅ Phantom wallet adapter initialized');
-      } catch (error) {
-        console.warn('⚠️ Failed to initialize Phantom adapter:', error);
-      }
-      
-      // Initialize Solflare Wallet  
-      try {
-        const solflare = new SolflareWalletAdapter({ network });
-        adapters.push(solflare);
-        console.log('✅ Solflare wallet adapter initialized');
-      } catch (error) {
-        console.warn('⚠️ Failed to initialize Solflare adapter:', error);
-      }
-      
-      console.log(`✅ Total wallet adapters initialized: ${adapters.length}`);
-      
-      if (adapters.length === 0) {
-        console.error('❌ No wallet adapters could be initialized!');
-        throw new Error('No wallet adapters available');
-      }
-      
-      return adapters;
+      // Phantom Wallet
+      console.log('🟣 Initializing Phantom wallet...');
+      const phantom = new PhantomWalletAdapter();
+      adapters.push(phantom);
+      console.log('✅ Phantom wallet adapter ready');
     } catch (error) {
-      console.error('❌ Critical error initializing wallet adapters:', error);
-      return [];
+      console.warn('⚠️ Phantom adapter failed:', error);
     }
+    
+    try {
+      // Solflare Wallet
+      console.log('🟠 Initializing Solflare wallet...');
+      const solflare = new SolflareWalletAdapter({ network });
+      adapters.push(solflare);
+      console.log('✅ Solflare wallet adapter ready');
+    } catch (error) {
+      console.warn('⚠️ Solflare adapter failed:', error);
+    }
+    
+    console.log(`✅ Total wallet adapters: ${adapters.length}`);
+    return adapters;
   }, [network]);
 
-  // Error handler for wallet operations
+  // Enhanced error handler
   const handleWalletError = useCallback((error: WalletError) => {
-    console.error('🚨 Wallet operation error:', error);
+    console.error('🚨 Wallet Error:', {
+      name: error.name,
+      message: error.message,
+      code: error.code,
+    });
     
-    // Enhanced error categorization
+    // Don't show intrusive alerts for common errors
     switch (error.name) {
       case 'WalletNotConnectedError':
-        console.log('ℹ️ Wallet not connected - this is normal for initial state');
+        console.log('ℹ️ Wallet not connected (normal state)');
         break;
       case 'WalletConnectionError':
-        console.log('🔄 Wallet connection failed - user may have rejected or wallet unavailable');
-        console.log('💡 Make sure you have Phantom or Solflare extension installed');
+        console.log('🔄 Connection failed - user might have rejected');
         break;
       case 'WalletDisconnectedError':
-        console.log('ℹ️ Wallet disconnected - user initiated or wallet closed');
-        break;
-      case 'WalletNotReadyError':
-        console.log('⏳ Wallet not ready - extension may still be loading');
-        break;
-      case 'WalletNotInstalledError':
-        console.log('📦 Wallet not installed - please install Phantom or Solflare extension');
+        console.log('ℹ️ Wallet disconnected');
         break;
       default:
-        console.error('❌ Unexpected wallet error:', {
-          name: error.name,
-          message: error.message,
-          code: error.code,
-        });
-        break;
+        console.error('❌ Unexpected wallet error');
     }
   }, []);
 
-  // Connection provider configuration
+  // Connection configuration
   const connectionConfig = useMemo(() => ({
     commitment: 'confirmed' as const,
     confirmTransactionInitialTimeout: 60000,
-    disableRetryOnRateLimit: false,
   }), []);
 
-  // Wallet provider configuration
+  // Wallet configuration
   const walletConfig = useMemo(() => ({
     wallets,
-    autoConnect: false, // Manual connection for better UX
+    autoConnect: false,
     onError: handleWalletError,
-    localStorageKey: 'solrps-wallet-adapter',
+    localStorageKey: 'solrps-wallet',
   }), [wallets, handleWalletError]);
 
-  // Debug wallet detection on mount
+  // Debug wallet detection
   useEffect(() => {
-    console.log('🔍 Checking for installed wallets...');
-    
     if (typeof window !== 'undefined') {
       const windowAny = window as any;
       
-      if (windowAny.phantom?.solana?.isPhantom) {
-        console.log('✅ Phantom wallet detected');
-      } else {
-        console.log('❌ Phantom wallet not detected');
-      }
-      
-      if (windowAny.solflare?.isSolflare) {
-        console.log('✅ Solflare wallet detected');
-      } else {
-        console.log('❌ Solflare wallet not detected');
-      }
-      
-      if (!windowAny.phantom?.solana && !windowAny.solflare) {
-        console.log('⚠️ No Solana wallets detected. Please install Phantom or Solflare.');
-      }
+      setTimeout(() => {
+        console.log('🔍 Wallet Detection:', {
+          phantom: !!windowAny.phantom?.solana?.isPhantom,
+          solflare: !!windowAny.solflare?.isSolflare,
+          solana: !!windowAny.solana,
+        });
+      }, 1000);
     }
   }, []);
 
-  // Log final configuration
-  console.log('⚙️ Final wallet provider configuration:', {
-    endpoint,
-    network,
-    walletsCount: wallets.length,
-    autoConnect: walletConfig.autoConnect,
-    commitment: connectionConfig.commitment,
-  });
-
-  // Validate configuration before rendering
+  // Validate before rendering
   if (wallets.length === 0) {
-    console.error('❌ Cannot render wallet provider: No wallets available');
-    
+    console.error('❌ No wallet adapters available');
     return (
-      <div className="min-h-screen flex items-center justify-center bg-neutral-950 text-neutral-100">
-        <div className="text-center space-y-4 p-6">
+      <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white">
+        <div className="text-center space-y-4 p-6 max-w-md">
           <div className="text-6xl">⚠️</div>
-          <h2 className="text-xl font-bold">Wallet System Error</h2>
-          <p className="text-gray-400 max-w-md">
-            No wallet adapters could be loaded. Please refresh the page or install a Solana wallet extension.
+          <h2 className="text-xl font-bold">Wallet Setup Required</h2>
+          <p className="text-gray-400">
+            Please install a Solana wallet extension to continue.
           </p>
           <div className="space-y-2">
             <a 
@@ -211,7 +171,7 @@ export const SolanaWalletProvider: FC<Props> = ({ children }) => {
               rel="noopener noreferrer"
               className="block px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors"
             >
-              Install Phantom Wallet
+              📦 Install Phantom Wallet
             </a>
             <a 
               href="https://solflare.com/" 
@@ -219,7 +179,7 @@ export const SolanaWalletProvider: FC<Props> = ({ children }) => {
               rel="noopener noreferrer"
               className="block px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors"
             >
-              Install Solflare Wallet
+              📦 Install Solflare Wallet
             </a>
           </div>
           <button
@@ -233,6 +193,12 @@ export const SolanaWalletProvider: FC<Props> = ({ children }) => {
     );
   }
 
+  console.log('✅ Rendering wallet provider with config:', {
+    endpoint,
+    network,
+    walletsCount: wallets.length,
+  });
+
   return (
     <ConnectionProvider 
       endpoint={endpoint}
@@ -240,16 +206,9 @@ export const SolanaWalletProvider: FC<Props> = ({ children }) => {
     >
       <WalletProvider {...walletConfig}>
         <WalletModalProvider>
-          <WalletConnectionMonitor>
-            {children}
-          </WalletConnectionMonitor>
+          {children}
         </WalletModalProvider>
       </WalletProvider>
     </ConnectionProvider>
   );
 };
-
-// Component to monitor wallet connection events
-function WalletConnectionMonitor({ children }: { children: ReactNode }) {
-  return <>{children}</>;
-}

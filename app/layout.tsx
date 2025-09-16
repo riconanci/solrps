@@ -1,10 +1,8 @@
-// app/layout.tsx - FIXED: Proper Solana Wallet Provider Structure
+// app/layout.tsx - COMPLETE REWRITE: Proper Wallet Provider Setup
 import "./globals.css";
 import { ReactNode } from "react";
 import { Navigation } from "../src/components/Navigation";
-
-// FIXED: Import the proper wallet provider based on environment
-import { ProperWalletProvider } from "../src/components/ProperWalletProvider";
+import { SolanaWalletProvider } from "../src/components/SolanaWalletProvider";
 
 export const metadata = {
   title: "SolRPS - Rock Paper Scissors on Solana",
@@ -19,32 +17,33 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <meta name="theme-color" content="#0f172a" />
         <link rel="icon" href="/favicon.ico" />
       </head>
-      <body className="min-h-screen bg-neutral-950 text-neutral-100 antialiased">
+      <body className="min-h-screen bg-slate-900 text-white antialiased">
         {/* 
-          FIXED: Proper wallet provider that ensures WalletContext is available
-          This provides the correct ConnectionProvider > WalletProvider > WalletModalProvider structure
+          COMPLETE REWRITE: Clean wallet provider setup
+          This provides: ConnectionProvider > WalletProvider > WalletModalProvider
+          All in the correct order with proper configuration
         */}
-        <ProperWalletProvider>
-          <AppStructure>
+        <SolanaWalletProvider>
+          <AppContent>
             {children}
-          </AppStructure>
-        </ProperWalletProvider>
+          </AppContent>
+        </SolanaWalletProvider>
       </body>
     </html>
   );
 }
 
-// Main app structure component (PRESERVED EXACTLY)
-function AppStructure({ children }: { children: ReactNode }) {
+// Main app content component
+function AppContent({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen flex flex-col">
-      {/* Fixed Navigation Header */}
+      {/* Navigation Header */}
       <Navigation />
       
-      {/* Main Content Area */}
+      {/* Main Content */}
       <main className="flex-1">
         <div className="mx-auto max-w-6xl px-4 py-8">
-          {/* Phase 2 Development Banner */}
+          {/* Development Status Banner */}
           <DevelopmentBanner />
           
           {/* Page Content */}
@@ -60,19 +59,16 @@ function AppStructure({ children }: { children: ReactNode }) {
   );
 }
 
-// Development banner component (PRESERVED EXACTLY)
+// Development banner showing current configuration
 function DevelopmentBanner() {
-  // Only render on client-side in development
+  // Only show in development on client-side
   if (typeof window === 'undefined' || process.env.NODE_ENV !== 'development') {
     return null;
   }
 
   const isPhase2Enabled = process.env.NEXT_PUBLIC_ENABLE_PHASE2 === 'true';
   const isBlockchainEnabled = process.env.NEXT_PUBLIC_USE_BLOCKCHAIN === 'true';
-
-  if (!isPhase2Enabled) {
-    return null;
-  }
+  const hasTokenMint = !!process.env.NEXT_PUBLIC_TOKEN_MINT_ADDRESS;
 
   return (
     <div className="mb-6 p-4 bg-gradient-to-r from-blue-900/50 to-purple-900/50 border border-blue-500/30 rounded-lg shadow-lg">
@@ -80,97 +76,71 @@ function DevelopmentBanner() {
         <span className="text-2xl animate-pulse">🚀</span>
         <div>
           <h3 className="text-lg font-bold text-white">
-            Phase 2 Step 2 - Real Wallet Integration
+            SolRPS - Phase 2 Development Mode
           </h3>
           <p className="text-sm text-gray-300">
-            {isBlockchainEnabled
-              ? "🔥 BLOCKCHAIN MODE ACTIVE - Real Solana wallets enabled!"
-              : "Mock wallets active - Set USE_BLOCKCHAIN=true for real wallets"
-            }
+            Real Solana wallet integration with SPL token support
           </p>
         </div>
       </div>
       
-      {/* Configuration Status Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs mb-3">
-        <div className={`px-2 py-1 rounded text-center font-medium ${
-          isBlockchainEnabled 
-            ? 'bg-green-500/20 text-green-400 border border-green-500/30' 
-            : 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
-        }`}>
-          <div className="font-bold">Blockchain</div>
-          <div>{isBlockchainEnabled ? 'ENABLED ✅' : 'DISABLED'}</div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+        <div className="flex items-center gap-2">
+          <span className={isPhase2Enabled ? "text-green-400" : "text-red-400"}>
+            {isPhase2Enabled ? "✅" : "❌"}
+          </span>
+          <span>Phase 2 UI</span>
         </div>
         
-        <div className="px-2 py-1 rounded bg-blue-500/20 text-blue-400 border border-blue-500/30 text-center">
-          <div className="font-bold">Cluster</div>
-          <div>{process.env.NEXT_PUBLIC_SOLANA_CLUSTER?.toUpperCase() || 'DEVNET'}</div>
+        <div className="flex items-center gap-2">
+          <span className={isBlockchainEnabled ? "text-green-400" : "text-red-400"}>
+            {isBlockchainEnabled ? "✅" : "❌"}
+          </span>
+          <span>Blockchain Mode</span>
         </div>
         
-        <div className="px-2 py-1 rounded bg-purple-500/20 text-purple-400 border border-purple-500/30 text-center">
-          <div className="font-bold">Phase 2</div>
-          <div>{isPhase2Enabled ? 'ACTIVE' : 'INACTIVE'}</div>
+        <div className="flex items-center gap-2">
+          <span className={hasTokenMint ? "text-green-400" : "text-yellow-400"}>
+            {hasTokenMint ? "✅" : "⚠️"}
+          </span>
+          <span>Token Configuration</span>
         </div>
         
-        {isBlockchainEnabled && (
-          <div className="px-2 py-1 rounded bg-green-500/20 text-green-400 border border-green-500/30 text-center animate-pulse">
-            <div className="font-bold">Status</div>
-            <div>LIVE 🔗</div>
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          <span className="text-blue-400">🌐</span>
+          <span>{process.env.NEXT_PUBLIC_SOLANA_CLUSTER || 'devnet'}</span>
+        </div>
       </div>
       
-      {/* Status Message */}
-      {isBlockchainEnabled ? (
-        <div className="p-3 bg-green-900/20 border border-green-500/30 rounded text-green-300 text-sm">
-          <div className="flex items-center gap-2">
-            <span className="text-green-400">✅</span>
-            <strong>Phase 2 Step 2 Active:</strong>
-          </div>
-          <div className="mt-1 text-green-200">
-            Real Solana wallet connections enabled! Connect Phantom or Solflare to play with real wallets.
-          </div>
-        </div>
-      ) : (
-        <div className="p-3 bg-yellow-900/20 border border-yellow-500/30 rounded text-yellow-300 text-sm">
-          <div className="flex items-center gap-2">
-            <span className="text-yellow-400">⏳</span>
-            <strong>Mock Mode Active:</strong>
-          </div>
-          <div className="mt-1 text-yellow-200">
-            Set <code className="bg-black/30 px-1 rounded">USE_BLOCKCHAIN=true</code> in .env.local to enable real wallet connections.
-          </div>
-        </div>
-      )}
+      <div className="mt-3 p-2 bg-black/20 rounded text-xs text-gray-400">
+        <div><strong>Current Configuration:</strong></div>
+        <div>• Wallet Provider: {isBlockchainEnabled ? 'Solana (Real Wallets)' : 'Mock (URL Switching)'}</div>
+        <div>• Balance Source: {hasTokenMint && isBlockchainEnabled ? 'SPL Token' : 'Database'}</div>
+        <div>• Network: {process.env.NEXT_PUBLIC_SOLANA_CLUSTER || 'devnet'}</div>
+        {!hasTokenMint && isBlockchainEnabled && (
+          <div className="text-yellow-400 mt-1">⚠️ Add NEXT_PUBLIC_TOKEN_MINT_ADDRESS to .env for token mode</div>
+        )}
+      </div>
     </div>
   );
 }
 
-// Simple footer component (PRESERVED EXACTLY)
+// Simple footer component
 function Footer() {
   return (
-    <footer className="border-t border-white/10 bg-slate-900/50">
-      <div className="mx-auto max-w-6xl px-4 py-6">
-        <div className="flex flex-col md:flex-row justify-between items-center gap-4 text-sm text-gray-400">
-          <div className="flex items-center gap-2">
-            <span className="text-lg">⚔️</span>
-            <span className="font-medium">SolRPS</span>
-            <span className="text-xs bg-purple-500/20 text-purple-400 px-2 py-1 rounded">
-              Phase 2 Step 2
-            </span>
-          </div>
-          
-          <div className="flex items-center gap-4 text-xs">
-            <span>Rock Paper Scissors on Solana</span>
-            <span className="hidden md:inline">•</span>
-            <span>Play-to-Earn Gaming</span>
-            <span className="hidden md:inline">•</span>
-            <span>Weekly Competitions</span>
-          </div>
-          
-          <div className="text-xs text-gray-500">
-            Built with Next.js + Solana Web3
-          </div>
+    <footer className="border-t border-slate-700 bg-slate-800/50 py-6 mt-auto">
+      <div className="max-w-6xl mx-auto px-4 text-center text-sm text-gray-400">
+        <div className="flex items-center justify-center gap-4">
+          <span>SolRPS - Rock Paper Scissors on Solana</span>
+          <span>•</span>
+          <span>Phase 2: Real Wallet Integration</span>
+          <span>•</span>
+          <span>Built with Next.js & Solana</span>
+        </div>
+        <div className="mt-2 text-xs text-gray-500">
+          {process.env.NODE_ENV === 'development' && (
+            <>Development Mode • {new Date().getFullYear()}</>
+          )}
         </div>
       </div>
     </footer>

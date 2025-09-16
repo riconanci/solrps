@@ -1,4 +1,4 @@
-// src/components/Navigation.tsx - FIXED: TypeScript Errors + Better Wallet UX
+// src/components/Navigation.tsx - FIXED: Hydration Error Resolved
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -6,32 +6,24 @@ import { useState, useEffect, useCallback } from "react";
 import { useWallet as useMockWallet, useMockWalletInitialization } from "../state/wallet";
 import { useGameWallet, useIsPhase2 } from "../hooks/useGameWallet";
 import { WalletDebugInfo } from "./WalletDebugInfo";
+import { APP_CONFIG } from "../config/constants";
 
-// Safe conditional import with proper error handling
+// Safe conditional import for wallet components
 let WalletMultiButton: any = null;
 let WalletDisconnectButton: any = null;
-let useSolanaWallet: any = null;
 
 if (typeof window !== 'undefined') {
   try {
-    const isBlockchain = process.env.NEXT_PUBLIC_USE_BLOCKCHAIN === 'true';
-    if (isBlockchain) {
+    if (process.env.NEXT_PUBLIC_USE_BLOCKCHAIN === 'true') {
       import('@solana/wallet-adapter-react-ui').then(walletUI => {
         WalletMultiButton = walletUI.WalletMultiButton;
         WalletDisconnectButton = walletUI.WalletDisconnectButton;
       }).catch(error => {
-        console.warn('Wallet adapter UI not available:', error);
-      });
-      
-      // Import Solana wallet hook for improved UX
-      import('@solana/wallet-adapter-react').then(walletAdapter => {
-        useSolanaWallet = walletAdapter.useWallet;
-      }).catch(error => {
-        console.warn('Wallet adapter hooks not available:', error);
+        console.warn('Wallet UI components not available:', error);
       });
     }
   } catch (error) {
-    console.warn('Failed to setup wallet imports:', error);
+    console.warn('Failed to import wallet components:', error);
   }
 }
 
@@ -53,18 +45,73 @@ export function Navigation() {
   const [claimableCount, setClaimableCount] = useState(0);
   const [devRewardsAvailable, setDevRewardsAvailable] = useState(false);
   
-  // IMPROVED: Track wallet selection state for better UX
-  const [walletSelectionOpen, setWalletSelectionOpen] = useState(false);
-  const [showWalletInstructions, setShowWalletInstructions] = useState(false);
+  // FIXED: State for hydration-safe environment detection
+  const [isClient, setIsClient] = useState(false);
+  const [environmentFlags, setEnvironmentFlags] = useState({
+    isBlockchain: false,
+    isPhase2Enabled: false,
+  });
   
-  // Initialize mock wallet from URL parameters
+  // Initialize mock wallet from URL
   useMockWalletInitialization();
 
-  // Environment variables
-  const isBlockchain = typeof window !== 'undefined' && process.env.NEXT_PUBLIC_USE_BLOCKCHAIN === 'true';
-  const isPhase2Enabled = typeof window !== 'undefined' && process.env.NEXT_PUBLIC_ENABLE_PHASE2 === 'true';
+  // FIXED: Handle client-side hydration
+  useEffect(() => {
+    setIsClient(true);
+    setEnvironmentFlags({
+      isBlockchain: process.env.NEXT_PUBLIC_USE_BLOCKCHAIN === 'true',
+      isPhase2Enabled: process.env.NEXT_PUBLIC_ENABLE_PHASE2 === 'true',
+    });
+  }, []);
 
-  // Navigation items configuration
+  // Balance formatting
+  const formatBalance = (balance: number): string => {
+    if (balance >= 1000000) {
+      return `${(balance / 1000000).toFixed(1)}M`;
+    } else if (balance >= 1000) {
+      return `${(balance / 1000).toFixed(1)}K`;
+    } else {
+      return balance.toLocaleString();
+    }
+  };
+
+  // Balance display info based on source
+  const getBalanceDisplayInfo = () => {
+    const source = gameWallet.balanceSource || 'unknown';
+    
+    switch (source) {
+      case 'token':
+        return {
+          label: 'RPS',
+          color: gameWallet.tokenAccountExists ? 'text-green-400' : 'text-yellow-400',
+          mode: gameWallet.tokenAccountExists ? '✅ Token Account' : '⚠️ No Token Account',
+          modeColor: gameWallet.tokenAccountExists ? 'text-green-400' : 'text-yellow-400'
+        };
+      case 'mock':
+        return {
+          label: 'RPS',
+          color: 'text-green-400',
+          mode: '🎮 Mock Mode',
+          modeColor: 'text-green-400'
+        };
+      case 'database':
+        return {
+          label: 'RPS',
+          color: 'text-blue-400',
+          mode: '📊 Database Mode',
+          modeColor: 'text-blue-400'
+        };
+      default:
+        return {
+          label: 'RPS',
+          color: 'text-gray-400',
+          mode: '❓ Unknown Mode',
+          modeColor: 'text-gray-400'
+        };
+    }
+  };
+
+  // Navigation items
   const navItems: NavItem[] = [
     { 
       href: "/play", 
@@ -76,13 +123,13 @@ export function Navigation() {
       href: "/lobby", 
       label: "Lobby", 
       shortLabel: "Lobby", 
-      emoji: "🏟️" 
+      emoji: "🏢" 
     },
     { 
       href: "/my", 
       label: "My Matches", 
       shortLabel: "Matches", 
-      emoji: "📋" 
+      emoji: "📊" 
     },
     { 
       href: "/leaderboard", 
@@ -90,160 +137,118 @@ export function Navigation() {
       shortLabel: "Board",
       emoji: "🏆",
       badge: claimableCount > 0 ? claimableCount : undefined,
-      badgeColor: "bg-green-500"
+      badgeColor: "bg-green-500",
     },
   ];
 
-  // Close mobile menu when route changes
+  // Fetch notification counts
+  const fetchNotificationCounts = useCallback(async () => {
+    if (!gameWallet.connected || !gameWallet.userId) return;
+
+    try {
+      // Weekly rewards
+      const weeklyResponse = await fetch('/api/weekly/claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          userId: gameWallet.userId,
+          dryRun: true 
+        }),
+      });
+
+      if (weeklyResponse.ok) {
+        const data = await weeklyResponse.json();
+        setClaimableCount(data.claimableRewards?.length || 0);
+      }
+
+      // Dev rewards
+      if (gameWallet.publicKey) {
+        const devResponse = await fetch('/api/dev/claim', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            walletAddress: gameWallet.publicKey,
+            dryRun: true 
+          }),
+        });
+
+        if (devResponse.ok) {
+          const devData = await devResponse.json();
+          setDevRewardsAvailable(devData.availableRewards > 0);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching notifications:', error);
+    }
+  }, [gameWallet.connected, gameWallet.userId, gameWallet.publicKey]);
+
+  // Fetch notifications on mount and interval
+  useEffect(() => {
+    if (isClient) {
+      fetchNotificationCounts();
+      const interval = setInterval(fetchNotificationCounts, 30000);
+      return () => clearInterval(interval);
+    }
+  }, [fetchNotificationCounts, isClient]);
+
+  // Close mobile menu on route change
   useEffect(() => {
     setMobileMenuOpen(false);
   }, [pathname]);
 
-  // Check for claimable rewards
-  useEffect(() => {
-    const fetchRewards = async () => {
-      try {
-        const weeklyResponse = await fetch('/api/weekly/claim');
-        if (weeklyResponse.ok) {
-          const weeklyData = await weeklyResponse.json();
-          if (weeklyData?.claimable) {
-            setClaimableCount(weeklyData.claimable.length);
-          }
-        }
-
-        const devResponse = await fetch('/api/dev/claim');
-        if (devResponse.ok) {
-          const devData = await devResponse.json();
-          if (devData?.totalUnclaimed > 0) {
-            setDevRewardsAvailable(true);
-          }
-        }
-      } catch (error) {
-        console.warn('Failed to fetch rewards info:', error);
-      }
-    };
-
-    fetchRewards();
-    const interval = setInterval(fetchRewards, 30000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // IMPROVED: Better wallet connection state management
-  useEffect(() => {
-    if (isBlockchain && isPhase2Enabled) {
-      // Monitor for wallet selection state changes
-      const checkWalletState = () => {
-        const modalElement = document.querySelector('.wallet-adapter-modal');
-        const isModalOpen = modalElement && !modalElement.classList.contains('wallet-adapter-modal-fade-out');
-        
-        if (isModalOpen && !walletSelectionOpen) {
-          setWalletSelectionOpen(true);
-          setShowWalletInstructions(true);
-          console.log('🎯 Wallet selection modal opened');
-        } else if (!isModalOpen && walletSelectionOpen) {
-          setWalletSelectionOpen(false);
-          
-          // Show instructions for a few seconds after modal closes
-          setTimeout(() => {
-            setShowWalletInstructions(false);
-          }, 3000);
-          console.log('🎯 Wallet selection modal closed');
-        }
-      };
-      
-      const observer = new MutationObserver(checkWalletState);
-      observer.observe(document.body, { childList: true, subtree: true });
-      
-      return () => observer.disconnect();
-    }
-  }, [isBlockchain, isPhase2Enabled, walletSelectionOpen]);
-
-  // Enhanced wallet connection handlers
-  const handleWalletConnect = useCallback(() => {
-    console.log('🔗 Manual wallet connection triggered');
-    setShowWalletInstructions(true);
-    
-    // Auto-hide instructions after 5 seconds
-    setTimeout(() => {
-      setShowWalletInstructions(false);
-    }, 5000);
-  }, []);
-
-  const handleWalletDisconnect = useCallback(async () => {
-    console.log('🔌 Manual wallet disconnection triggered');
+  // Manual refresh handler
+  const handleRefreshBalance = useCallback(async () => {
+    console.log('🔄 Manual balance refresh requested');
     try {
-      if (gameWallet.disconnect) {
-        await gameWallet.disconnect();
+      if (gameWallet.refreshBalance) {
+        await gameWallet.refreshBalance();
       }
-      setShowWalletInstructions(false);
     } catch (error) {
-      console.error('Error disconnecting wallet:', error);
+      console.error('Manual refresh failed:', error);
     }
   }, [gameWallet]);
 
+  const balanceInfo = getBalanceDisplayInfo();
+
   return (
-    <nav className="bg-slate-800 border-b border-white/10 sticky top-0 z-50 shadow-lg">
-      {/* IMPROVED: Wallet instruction banner */}
-      {showWalletInstructions && isBlockchain && isPhase2Enabled && !gameWallet.connected && (
-        <div className="bg-blue-600/20 border-b border-blue-500/30 px-4 py-2">
-          <div className="max-w-6xl mx-auto">
-            <div className="flex items-center gap-3 text-sm">
-              <span className="text-blue-400">💡</span>
-              <span className="text-blue-200">
-                {walletSelectionOpen 
-                  ? "Select your wallet type (Phantom recommended), then click Connect again to complete the connection."
-                  : "Click 'Connect Wallet' to select your wallet type, then click again to connect."
-                }
-              </span>
-              <button 
-                onClick={() => setShowWalletInstructions(false)}
-                className="text-blue-400 hover:text-blue-300 ml-auto"
-              >
-                ✕
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      
-      <div className="max-w-6xl mx-auto px-4">
-        <div className="flex items-center justify-between h-16">
-          
-          {/* Logo Section */}
-          <Link href="/" className="flex items-center gap-3 flex-shrink-0 hover:opacity-80 transition-opacity">
-            <span className="text-2xl">🪨📄✂️</span>
-            <div className="flex items-center gap-2">
+    <nav className="bg-slate-800 border-b border-slate-700 sticky top-0 z-50">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex justify-between h-16">
+          {/* Logo */}
+          <div className="flex items-center">
+            <Link href="/" className="flex items-center space-x-2">
+              <span className="text-2xl">🪨📄✂️</span>
               <span className="text-xl font-bold text-white">SolRPS</span>
-              <span className="text-xs bg-slate-600 px-2 py-1 rounded text-slate-200">
-                Rock Paper Scissors
-              </span>
-              {isPhase2Enabled && (
-                <span className="text-xs bg-purple-500 px-2 py-1 rounded text-white font-bold animate-pulse">
-                  PHASE 2
+              <span className="text-xs bg-blue-500 px-2 py-1 rounded text-white">v1</span>
+              
+              {/* FIXED: Only render badges after client hydration */}
+              {isClient && environmentFlags.isPhase2Enabled && (
+                <span className="text-xs bg-purple-600 text-white px-2 py-1 rounded-full">
+                  PHASE2
                 </span>
               )}
-              {isBlockchain && (
-                <span className="text-xs bg-green-500 px-2 py-1 rounded text-white font-bold">
+              {isClient && environmentFlags.isBlockchain && (
+                <span className="text-xs bg-green-600 text-white px-2 py-1 rounded-full">
                   BLOCKCHAIN
                 </span>
               )}
-            </div>
-          </Link>
+            </Link>
+          </div>
 
-          {/* Desktop Navigation Links */}
-          <div className="hidden md:flex items-center gap-1">
+          {/* Desktop Navigation */}
+          <div className="flex items-center space-x-1">
             {navItems.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
-                className={`relative flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`relative px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
                   pathname === item.href
                     ? "bg-blue-600 text-white"
-                    : "text-gray-300 hover:text-white hover:bg-white/10"
+                    : "text-gray-300 hover:text-white hover:bg-slate-700"
                 }`}
               >
                 <span>{item.emoji}</span>
-                <span>{item.label}</span>
+                <span className="hidden sm:inline">{item.label}</span>
                 
                 {/* Notification Badge */}
                 {item.badge && (
@@ -263,415 +268,169 @@ export function Navigation() {
           </div>
 
           {/* Wallet Section */}
-          <div className="hidden md:flex items-center gap-4">
-            <ImprovedWalletDisplay 
-              isBlockchain={isBlockchain}
-              isPhase2Enabled={isPhase2Enabled}
-              mockWallet={mockWallet}
-              gameWallet={gameWallet}
-              onConnect={handleWalletConnect}
-              onDisconnect={handleWalletDisconnect}
-              showInstructions={showWalletInstructions}
-            />
-          </div>
+          <div className="flex items-center space-x-4">
+            {gameWallet.connected ? (
+              <div className="flex items-center space-x-4">
+                {/* Balance Display */}
+                <div className="hidden sm:block text-right">
+                  <div className="text-sm text-gray-400">Balance</div>
+                  <div className={`font-mono font-bold ${balanceInfo.color}`}>
+                    {formatBalance(gameWallet.balance)} {balanceInfo.label}
+                  </div>
+                  <div className="text-xs" style={{ color: balanceInfo.modeColor }}>
+                    {balanceInfo.mode}
+                  </div>
+                </div>
 
-          {/* Mobile Menu Button */}
-          <button
-            className="md:hidden p-2 rounded-lg text-gray-300 hover:text-white hover:bg-white/10 transition-colors"
-            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-          >
-            <svg 
-              className={`w-6 h-6 transition-transform duration-200 ${mobileMenuOpen ? 'rotate-90' : ''}`} 
-              fill="none" 
-              stroke="currentColor" 
-              viewBox="0 0 24 24"
-            >
-              <path 
-                strokeLinecap="round" 
-                strokeLinejoin="round" 
-                strokeWidth={2} 
-                d={mobileMenuOpen ? "M6 18L18 6M6 6l12 12" : "M4 6h16M4 12h16M4 18h16"} 
-              />
-            </svg>
-          </button>
-        </div>
+                {/* Wallet Info */}
+                <div className="text-right">
+                  <div className="text-sm font-medium text-white">
+                    {gameWallet.displayName}
+                  </div>
+                  <div className="text-xs text-gray-400">
+                    {gameWallet.walletType === 'mock' ? (
+                      'Mock Wallet'
+                    ) : (
+                      <>
+                        {gameWallet.walletName || 'Solana'} • {gameWallet.solBalance.toFixed(3)} SOL
+                        {gameWallet.solBalance === 0 && (
+                          <span className="text-yellow-400 ml-1" title="Low SOL balance - needed for transaction fees">⚠️</span>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
 
-        {/* Mobile Menu */}
-        {mobileMenuOpen && (
-          <div className="md:hidden border-t border-white/10 py-4">
-            <div className="flex flex-col gap-3 mb-4">
-              {navItems.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={`relative flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-                    pathname === item.href
-                      ? "bg-blue-600 text-white"
-                      : "text-gray-300 hover:text-white hover:bg-white/10"
-                  }`}
-                  onClick={() => setMobileMenuOpen(false)}
+                {/* Refresh Button */}
+                <button
+                  onClick={handleRefreshBalance}
+                  className="text-gray-400 hover:text-white transition-colors p-1 rounded"
+                  title="Refresh balances"
                 >
-                  <span className="text-xl">{item.emoji}</span>
-                  <span className="font-medium">{item.shortLabel}</span>
-                  {item.badge && (
-                    <span className={`absolute right-4 ${item.badgeColor || 'bg-red-500'} text-white text-xs rounded-full h-5 w-5 flex items-center justify-center font-bold animate-pulse`}>
-                      {item.badge > 9 ? '9+' : item.badge}
-                    </span>
+                  🔄
+                </button>
+
+                {/* Disconnect Button - FIXED: Only render after client hydration */}
+                {gameWallet.walletType === 'solana' && isClient && environmentFlags.isBlockchain && WalletMultiButton ? (
+                  WalletDisconnectButton && (
+                    <WalletDisconnectButton className="!bg-red-600 !text-white !rounded-lg !px-4 !py-2 !text-sm hover:!bg-red-700" />
+                  )
+                ) : (
+                  <button
+                    onClick={() => gameWallet.disconnect()}
+                    className="bg-red-600 text-white rounded-lg px-4 py-2 text-sm hover:bg-red-700"
+                  >
+                    Disconnect
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center space-x-2">
+                {/* FIXED: Only render wallet buttons after client hydration */}
+                {isClient && environmentFlags.isBlockchain && WalletMultiButton ? (
+                  <WalletMultiButton className="!bg-blue-600 !text-white !rounded-lg !px-4 !py-2 !text-sm hover:!bg-blue-700" />
+                ) : (
+                  <div className="text-sm text-gray-400">
+                    {gameWallet.connecting ? 'Connecting...' : 'Not Connected'}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Mobile menu button */}
+            <div className="md:hidden">
+              <button
+                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                className="text-gray-400 hover:text-white focus:outline-none focus:text-white"
+              >
+                <span className="sr-only">Open main menu</span>
+                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Mobile Navigation */}
+        {mobileMenuOpen && (
+          <div className="md:hidden">
+            <div className="px-2 pt-2 pb-3 space-y-1 sm:px-3">
+              {navItems.map((item) => {
+                const isActive = pathname === item.href;
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={() => setMobileMenuOpen(false)}
+                    className={`flex items-center space-x-2 px-3 py-2 rounded-md text-base font-medium ${
+                      isActive
+                        ? "bg-slate-700 text-white"
+                        : "text-gray-300 hover:text-white hover:bg-slate-700"
+                    }`}
+                  >
+                    <span>{item.emoji}</span>
+                    <span>{item.shortLabel}</span>
+                    {item.badge && (
+                      <span className={`px-2 py-1 text-xs font-bold text-white rounded-full ${item.badgeColor}`}>
+                        {item.badge}
+                      </span>
+                    )}
+                  </Link>
+                );
+              })}
+              
+              {/* Mobile Balance Display */}
+              {gameWallet.connected && (
+                <div className="px-3 py-2 border-t border-slate-700 mt-4">
+                  <div className="text-sm text-gray-400">Balance</div>
+                  <div className={`font-mono font-bold ${balanceInfo.color}`}>
+                    {formatBalance(gameWallet.balance)} {balanceInfo.label}
+                  </div>
+                  <div className="text-xs mt-1" style={{ color: balanceInfo.modeColor }}>
+                    {balanceInfo.mode}
+                  </div>
+                  {gameWallet.walletType === 'solana' && (
+                    <div className="text-xs text-gray-500 mt-1">
+                      SOL: {gameWallet.solBalance.toFixed(3)}
+                      {gameWallet.solBalance === 0 && (
+                        <span className="text-yellow-400 ml-1">⚠️ Low balance</span>
+                      )}
+                    </div>
                   )}
-                </Link>
-              ))}
-            </div>
-
-            {/* Mobile Wallet Section */}
-            <div className="border-t border-white/10 pt-4 px-4">
-              <ImprovedMobileWalletDisplay 
-                isBlockchain={isBlockchain}
-                isPhase2Enabled={isPhase2Enabled}
-                mockWallet={mockWallet}
-                gameWallet={gameWallet}
-                onConnect={handleWalletConnect}
-                onDisconnect={handleWalletDisconnect}
-                showInstructions={showWalletInstructions}
-              />
+                </div>
+              )}
             </div>
           </div>
         )}
       </div>
-      
-      {/* Debug Component (Development Only) */}
-      <WalletDebugInfo />
+
+      {/* Development Banner - FIXED: Only render after client hydration */}
+      {isClient && process.env.NODE_ENV === 'development' && (
+        <div className="bg-purple-900/50 border-b border-purple-700">
+          <div className="max-w-7xl mx-auto px-4 py-2">
+            <div className="text-center text-sm text-purple-200">
+              🚧 <strong>Debug Info</strong> | 
+              Phase 2: {environmentFlags.isPhase2Enabled ? '✅' : '❌'} | 
+              Blockchain: {environmentFlags.isBlockchain ? '✅' : '❌'} | 
+              Token Mode: {gameWallet.isTokenMode ? '✅' : '❌'} |
+              Token Address: {APP_CONFIG.TOKEN_MINT_ADDRESS ? '✅' : '❌'} |
+              Balance Source: <strong>{gameWallet.balanceSource?.toUpperCase() || 'UNKNOWN'}</strong>
+              {gameWallet.isTokenMode && !gameWallet.tokenAccountExists && gameWallet.connected && (
+                <span className="ml-2 text-yellow-300">⚠️ Run: spl-token create-account {APP_CONFIG.TOKEN_MINT_ADDRESS}</span>
+              )}
+              {gameWallet.walletType === 'solana' && gameWallet.solBalance === 0 && (
+                <span className="ml-2 text-yellow-300">⚠️ Get SOL for transaction fees</span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Debug Component - FIXED: Only render after client hydration */}
+      {isClient && process.env.NODE_ENV === 'development' && (
+        <WalletDebugInfo />
+      )}
     </nav>
-  );
-}
-
-// IMPROVED: Enhanced Wallet Display Component with Better UX
-function ImprovedWalletDisplay({ 
-  isBlockchain, 
-  isPhase2Enabled, 
-  mockWallet, 
-  gameWallet, 
-  onConnect, 
-  onDisconnect,
-  showInstructions
-}: {
-  isBlockchain: boolean;
-  isPhase2Enabled: boolean;
-  mockWallet: any;
-  gameWallet: any;
-  onConnect: () => void;
-  onDisconnect: () => void;
-  showInstructions: boolean;
-}) {
-  
-  if (isBlockchain && isPhase2Enabled) {
-    const isConnected = gameWallet?.connected;
-    const publicKey = gameWallet?.publicKey;
-    const isConnecting = gameWallet?.connecting;
-    
-    if (isConnected && publicKey) {
-      return (
-        <div className="flex items-center gap-3">
-          {/* Status Indicator */}
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
-            <span className="text-xs text-green-400 font-medium">CONNECTED</span>
-          </div>
-          
-          {/* Wallet Info */}
-          <div className="text-right">
-            <div className="text-xs text-gray-400">Wallet</div>
-            <div className="text-sm font-mono text-blue-400">
-              {publicKey.slice(0, 4)}...{publicKey.slice(-4)}
-            </div>
-          </div>
-          
-          {/* Balance */}
-          <div className="bg-green-500/20 px-3 py-1 rounded-lg border border-green-500/30">
-            <span className="text-green-400 font-mono font-bold">
-              {gameWallet?.balance?.toLocaleString() || '0'}
-            </span>
-            <span className="text-green-400/70 ml-1 text-xs">RPS</span>
-          </div>
-
-          {/* Disconnect Button */}
-          <div className="flex gap-2">
-            {WalletDisconnectButton ? (
-              <WalletDisconnectButton className="!bg-red-500 !hover:bg-red-600 !text-white !px-3 !py-1 !text-xs !rounded-lg !flex !items-center !gap-1 !justify-center !whitespace-nowrap" />
-            ) : (
-              <button
-                onClick={onDisconnect}
-                className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 text-xs rounded-lg transition-colors flex items-center gap-1"
-              >
-                Disconnect
-              </button>
-            )}
-          </div>
-        </div>
-      );
-    } else {
-      // Not connected - show enhanced connect interface
-      return (
-        <div className="flex items-center gap-3">
-          {/* Status */}
-          <div className="text-right">
-            <div className="text-xs text-green-400 font-bold animate-pulse">
-              🔗 BLOCKCHAIN MODE
-            </div>
-            <div className="text-xs text-blue-400">
-              {isConnecting ? 'Connecting...' : 'Ready to Connect!'}
-            </div>
-          </div>
-          
-          {/* Enhanced Connect Button */}
-          <div className="relative">
-            {WalletMultiButton ? (
-              <WalletMultiButton 
-                className="!bg-blue-500 !hover:bg-blue-600 !text-white !px-4 !py-2 !text-sm !rounded-lg !flex !items-center !gap-1 !justify-center !whitespace-nowrap !transition-all"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.25rem',
-                  justifyContent: 'center',
-                  whiteSpace: 'nowrap',
-                  minWidth: 'auto'
-                }}
-                onClick={onConnect}
-              />
-            ) : (
-              <button
-                className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 text-sm rounded-lg transition-colors flex items-center gap-1"
-                onClick={onConnect}
-              >
-                Connect Wallet
-              </button>
-            )}
-            
-            {/* Instruction tooltip */}
-            {showInstructions && (
-              <div className="absolute top-full mt-2 left-0 w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 z-50">
-                <div className="flex items-start gap-2">
-                  <span className="text-blue-400">💡</span>
-                  <div>
-                    <div className="font-medium text-blue-300 mb-1">Two-Step Process:</div>
-                    <div>1. Click to select wallet type</div>
-                    <div>2. Click again to connect</div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      );
-    }
-  }
-
-  // Mock Mode
-  const currentUser = mockWallet.userId === 'seed_alice' ? 'Alice' : 
-                     mockWallet.userId === 'seed_bob' ? 'Bob' : 
-                     `User ${mockWallet.userId?.slice(0, 8) || 'Unknown'}`;
-
-  return (
-    <div className="flex items-center gap-3">
-      {/* Status */}
-      <div className="text-right">
-        <div className="text-xs text-blue-400 font-bold">
-          🎮 MOCK MODE
-        </div>
-        <div className="text-xs text-gray-300">
-          {currentUser}
-        </div>
-      </div>
-      
-      {/* Balance */}
-      <div className="bg-green-500/20 px-3 py-1 rounded-lg border border-green-500/30">
-        <span className="text-green-400 font-mono font-bold">
-          {mockWallet.balance?.toLocaleString() || '0'}
-        </span>
-        <span className="text-green-400/70 ml-1 text-xs">RPS</span>
-      </div>
-
-      {/* Switch Buttons */}
-      <div className="hidden sm:flex gap-1">
-        <button
-          onClick={() => window.location.href = '?user=alice'}
-          className={`text-xs px-3 py-2 rounded-lg font-medium transition-all duration-200 ${
-            mockWallet.userId === 'seed_alice'
-              ? 'bg-blue-600 text-white shadow-md'
-              : 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30'
-          }`}
-        >
-          👩‍💼 Alice
-        </button>
-        <button
-          onClick={() => window.location.href = '?user=bob'}
-          className={`text-xs px-3 py-2 rounded-lg font-medium transition-all duration-200 ${
-            mockWallet.userId === 'seed_bob'
-              ? 'bg-orange-600 text-white shadow-md'
-              : 'bg-orange-500/20 text-orange-400 hover:bg-orange-500/30'
-          }`}
-        >
-          👨‍💼 Bob
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// IMPROVED: Enhanced Mobile Wallet Display Component
-function ImprovedMobileWalletDisplay({ 
-  isBlockchain, 
-  isPhase2Enabled, 
-  mockWallet, 
-  gameWallet, 
-  onConnect, 
-  onDisconnect,
-  showInstructions
-}: {
-  isBlockchain: boolean;
-  isPhase2Enabled: boolean;
-  mockWallet: any;
-  gameWallet: any;
-  onConnect: () => void;
-  onDisconnect: () => void;
-  showInstructions: boolean;
-}) {
-  
-  if (isBlockchain && isPhase2Enabled) {
-    const isConnected = gameWallet?.connected;
-    const publicKey = gameWallet?.publicKey;
-    const isConnecting = gameWallet?.connecting;
-    
-    return (
-      <div>
-        <div className="text-xs text-green-400 font-bold mb-2 flex items-center gap-2">
-          <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-          BLOCKCHAIN MODE
-        </div>
-        
-        {isConnected && publicKey ? (
-          <div className="space-y-3">
-            <div className="bg-white/5 p-3 rounded-lg">
-              <div className="text-xs text-gray-400 mb-1">Connected Wallet</div>
-              <div className="text-sm font-mono text-blue-400">
-                {publicKey.slice(0, 8)}...{publicKey.slice(-8)}
-              </div>
-            </div>
-            
-            <div className="bg-white/5 p-3 rounded-lg">
-              <div className="text-xs text-gray-400 mb-1">Game Balance</div>
-              <div className="text-sm font-mono text-green-400 font-bold">
-                {gameWallet?.balance?.toLocaleString() || '0'} RPS
-              </div>
-            </div>
-            
-            <button
-              onClick={onDisconnect}
-              className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 text-sm rounded-lg transition-colors w-full"
-            >
-              Disconnect Wallet
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="text-center">
-              <div className="text-sm text-blue-400 mb-2">
-                {isConnecting ? 'Connecting to your wallet...' : 'Connect your Solana wallet'}
-              </div>
-            </div>
-            
-            {/* Enhanced instruction for mobile */}
-            {showInstructions && (
-              <div className="p-3 bg-blue-900/20 border border-blue-500/30 rounded-lg text-xs text-blue-200">
-                <div className="flex items-start gap-2">
-                  <span className="text-blue-400">💡</span>
-                  <div>
-                    <div className="font-medium text-blue-300 mb-1">Two-Step Process:</div>
-                    <div>1. Tap to select wallet type</div>
-                    <div>2. Tap again to connect</div>
-                  </div>
-                </div>
-              </div>
-            )}
-            
-            {/* Enhanced Mobile Connect Button */}
-            {WalletMultiButton ? (
-              <WalletMultiButton 
-                className="!bg-blue-500 !hover:bg-blue-600 !text-white !px-4 !py-2 !text-sm !rounded-lg !w-full !flex !items-center !gap-1 !justify-center !whitespace-nowrap"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.25rem',
-                  justifyContent: 'center',
-                  whiteSpace: 'nowrap',
-                  width: '100%'
-                }}
-                onClick={onConnect}
-              />
-            ) : (
-              <button
-                onClick={onConnect}
-                className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 text-sm rounded-lg transition-colors w-full flex items-center gap-1 justify-center"
-              >
-                {isConnecting ? 'Connecting...' : 'Connect Wallet'}
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // Mobile Mock Mode (preserved exactly)
-  return (
-    <div>
-      <div className="text-xs text-blue-400 font-bold mb-2 flex items-center gap-2">
-        <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse"></div>
-        MOCK MODE
-      </div>
-      
-      <div className="space-y-3">
-        <div className="bg-white/5 p-3 rounded-lg">
-          <div className="text-xs text-gray-400 mb-1">Current Player</div>
-          <div className="text-sm font-bold text-blue-400">
-            {mockWallet.userId === 'seed_alice' ? 'Alice (👩‍💼)' : 
-             mockWallet.userId === 'seed_bob' ? 'Bob (👨‍💼)' : 
-             `User ${mockWallet.userId?.slice(0, 8) || 'Unknown'}`}
-          </div>
-        </div>
-        
-        <div className="bg-white/5 p-3 rounded-lg">
-          <div className="text-xs text-gray-400 mb-1">Game Balance</div>
-          <div className="text-sm font-mono text-green-400 font-bold">
-            {mockWallet.balance?.toLocaleString() || '0'} RPS
-          </div>
-        </div>
-        
-        <div>
-          <div className="text-xs text-gray-400 mb-2">Switch Player:</div>
-          <div className="flex gap-2">
-            <button
-              onClick={() => window.location.href = '?user=alice'}
-              className={`flex-1 text-xs px-3 py-2 rounded-lg font-medium transition-all duration-200 ${
-                mockWallet.userId === 'seed_alice'
-                  ? 'bg-blue-600 text-white shadow-md'
-                  : 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30'
-              }`}
-            >
-              👩‍💼 Alice
-            </button>
-            <button
-              onClick={() => window.location.href = '?user=bob'}
-              className={`flex-1 text-xs px-3 py-2 rounded-lg font-medium transition-all duration-200 ${
-                mockWallet.userId === 'seed_bob'
-                  ? 'bg-orange-600 text-white shadow-md'
-                  : 'bg-orange-500/20 text-orange-400 hover:bg-orange-500/30'
-              }`}
-            >
-              👨‍💼 Bob
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
