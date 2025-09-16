@@ -1,4 +1,4 @@
-// app/leaderboard/page.tsx - COMPLETE FINAL REWRITE - FIXED WEEKLY MATCHES COUNT
+// app/leaderboard/page.tsx - FINAL CLEAN VERSION WITHOUT ANTI-SYBIL STATS
 "use client";
 import { useEffect, useState } from "react";
 import { useWallet } from "../../src/state/wallet";
@@ -78,71 +78,89 @@ export default function LeaderboardPage() {
         await wallet.switchUser(userId);
       };
       initWallet();
-    } else {
-      fetchLeaderboard(timeframe);
     }
-  }, [timeframe, wallet.isConnected]);
+  }, [wallet]);
 
-  async function fetchLeaderboard(tf: string) {
+  const fetchData = async () => {
+    if (!wallet.isConnected) return;
+    
     try {
       setLoading(true);
+      const response = await fetch(`/api/leaderboard?timeframe=${timeframe}`, {
+        headers: {
+          'Authorization': `Bearer ${wallet.userId}`
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      setData(result);
       setError(null);
-      const res = await fetch(`/api/leaderboard?timeframe=${tf}`);
-      if (!res.ok) throw new Error("Failed to fetch leaderboard");
-      const leaderboardData = await res.json();
-      console.log("Leaderboard data:", leaderboardData);
-      setData(leaderboardData);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      console.error('Error fetching leaderboard:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load leaderboard');
     } finally {
       setLoading(false);
     }
-  }
+  };
 
-  async function claimWeeklyReward(rewardId: string) {
-    if (claiming) return;
+  useEffect(() => {
+    fetchData();
+  }, [timeframe, wallet.isConnected, wallet.userId]);
+
+  const handleClaim = async (rewardId: string) => {
+    if (!wallet.isConnected) return;
     
-    setClaiming(rewardId);
     try {
-      const res = await fetch('/api/weekly/claim', {
+      setClaiming(rewardId);
+      const response = await fetch('/api/weekly/claim', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ weeklyRewardId: rewardId })
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${wallet.userId}`
+        },
+        body: JSON.stringify({ rewardId })
       });
+
+      if (!response.ok) {
+        const errorData = await response.text();
+        throw new Error(errorData || 'Failed to claim reward');
+      }
+
+      const result = await response.json();
       
-      const result = await res.json();
-      
-      if (res.ok) {
-        wallet.setBalance(result.newBalance);
-        fetchLeaderboard(timeframe);
-        alert(result.message);
+      if (result.success) {
+        wallet.updateBalance(result.claimedAmount);
+        await fetchData();
       } else {
-        alert(result.error);
+        throw new Error(result.error || 'Failed to claim reward');
       }
     } catch (err) {
-      alert('Failed to claim reward');
+      console.error('Error claiming reward:', err);
+      alert(err instanceof Error ? err.message : 'Failed to claim reward');
     } finally {
       setClaiming(null);
     }
-  }
+  };
 
-  // Calculate total weekly matches played from leaderboard data
+  // Calculate weekly matches played from leaderboard data
   const calculateWeeklyMatchesPlayed = () => {
     if (!data?.weeklyRewards?.weeklyLeaderboard) return 0;
-    
-    // Sum all matches played and divide by 2 (since each match involves 2 players)
-    const totalParticipations = data.weeklyRewards.weeklyLeaderboard.reduce((sum, player) => {
-      return sum + (player.matchesPlayed || 0);
-    }, 0);
-    
+    const totalParticipations = data.weeklyRewards.weeklyLeaderboard.reduce((total, player) => total + player.matchesPlayed, 0);
     return Math.floor(totalParticipations / 2);
   };
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-lg">Loading leaderboard...</div>
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-purple-900 p-4">
+        <div className="max-w-6xl mx-auto pt-8">
+          <div className="text-center">
+            <div className="text-2xl font-bold text-white mb-4">Loading Leaderboard...</div>
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto"></div>
+          </div>
         </div>
       </div>
     );
@@ -150,104 +168,53 @@ export default function LeaderboardPage() {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-red-400 text-lg">Error: {error}</div>
-          <button 
-            onClick={() => fetchLeaderboard(timeframe)}
-            className="mt-4 px-4 py-2 bg-blue-600 rounded hover:bg-blue-700"
-          >
-            Retry
-          </button>
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-purple-900 p-4">
+        <div className="max-w-6xl mx-auto pt-8">
+          <div className="text-center">
+            <div className="text-2xl font-bold text-red-400 mb-4">Error Loading Leaderboard</div>
+            <div className="text-gray-300 mb-4">{error}</div>
+            <button
+              onClick={fetchData}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg transition-colors"
+            >
+              Retry
+            </button>
+          </div>
         </div>
       </div>
     );
   }
 
-  if (!data) {
-    return (
-      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-lg">No data available</div>
-        </div>
-      </div>
-    );
-  }
+  if (!data) return null;
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white p-4 md:p-8">
-      <div className="max-w-6xl mx-auto space-y-8">
-        
-        {/* Header with Timeframe Selector */}
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-          <h1 className="text-3xl font-bold">🏆 Leaderboard</h1>
-          
-          <div className="flex gap-2 flex-wrap">
-            {[
-              { 
-                value: "all", 
-                label: "All Time",
-                icon: "🏆",
-                description: "Complete leaderboard history"
-              },
-              { 
-                value: "month", 
-                label: "This Month",
-                icon: "📅", 
-                description: "Last 30 days performance"
-              },
-              { 
-                value: "week", 
-                label: "This Week",
-                icon: "💰",
-                description: "Weekly rewards competition",
-                isSpecial: true,
-                badge: data?.weeklyRewards?.currentPeriod?.isDistributed ? "DISTRIBUTED" : "ACTIVE",
-                badgeColor: data?.weeklyRewards?.currentPeriod?.isDistributed ? "bg-yellow-500" : "bg-green-500"
-              }
-            ].map(option => (
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-purple-900 p-4">
+      <div className="max-w-6xl mx-auto pt-8">
+        <h1 className="text-4xl font-bold text-center mb-8 bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
+          🏆 Leaderboard
+        </h1>
+
+        {/* Filter Buttons */}
+        <div className="mb-8">
+          <div className="flex flex-wrap justify-center gap-2 mb-4">
+            {(["all", "month", "week"] as const).map((period) => (
               <button
-                key={option.value}
-                onClick={() => setTimeframe(option.value)}
-                className={`relative px-4 py-2 rounded-lg font-medium transition-all duration-200 group ${
-                  timeframe === option.value
-                    ? option.isSpecial 
-                      ? "bg-gradient-to-r from-purple-600 to-blue-600 text-white shadow-lg"
-                      : "bg-blue-600 text-white"
-                    : option.isSpecial
-                      ? "bg-gradient-to-r from-purple-500/10 to-blue-500/10 text-purple-300 hover:from-purple-500/20 hover:to-blue-500/20 border border-purple-500/30"
-                      : "bg-slate-700 text-gray-300 hover:bg-slate-600"
-                } ${option.isSpecial ? 'min-w-[140px]' : ''}`}
-                title={option.description}
+                key={period}
+                onClick={() => setTimeframe(period)}
+                className={`px-4 py-2 rounded-lg font-medium transition-all ${
+                  timeframe === period
+                    ? "bg-blue-600 text-white shadow-lg"
+                    : "bg-white/10 text-gray-300 hover:bg-white/20"
+                }`}
               >
-                <div className="flex items-center gap-2">
-                  <span>{option.icon}</span>
-                  <span>{option.label}</span>
-                  
-                  {option.isSpecial && option.badge && (
-                    <span className={`
-                      absolute -top-1 -right-1 px-2 py-0.5 text-xs font-bold rounded-full text-white
-                      ${option.badgeColor} animate-pulse
-                    `}>
-                      {option.badge}
-                    </span>
-                  )}
-                  
-                  {option.isSpecial && timeframe === option.value && data?.weeklyRewards?.currentPeriod && (
-                    <span className="text-xs bg-black/20 px-2 py-1 rounded-full">
-                      {data.weeklyRewards.currentPeriod.totalRewardsPool.toLocaleString()} 🎁
-                    </span>
-                  )}
-                </div>
-                
-                <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-10">
-                  {option.description}
-                  {option.isSpecial && data?.weeklyRewards?.currentPeriod && (
-                    <div className="text-xs text-gray-300 mt-1">
-                      Pool: {data.weeklyRewards.currentPeriod.totalRewardsPool.toLocaleString()} tokens
-                    </div>
-                  )}
-                </div>
+                {period === "all" && "All Time"}
+                {period === "month" && "This Month"}
+                {period === "week" && "Weekly Competition"}
+                {period === "week" && data?.weeklyRewards?.currentPeriod && (
+                  <span className="ml-2 text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-400">
+                    {data.weeklyRewards.totalClaimableAmount > 0 ? "CLAIMABLE" : "ACTIVE"}
+                  </span>
+                )}
               </button>
             ))}
             
@@ -263,7 +230,7 @@ export default function LeaderboardPage() {
         </div>
 
         {/* Stats Summary */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
           <div className="bg-white/5 rounded-xl p-4 text-center">
             <div className="text-2xl font-bold text-blue-400">{data.totalPlayers}</div>
             <div className="text-gray-400">Total Players</div>
@@ -280,254 +247,269 @@ export default function LeaderboardPage() {
           </div>
         </div>
 
-        {/* Weekly Competition Quick Stats - FIXED THE MATCHES PLAYED COUNT */}
+        {/* WEEKLY COMPETITION INFO PANEL */}
         {timeframe === "week" && data?.weeklyRewards?.currentPeriod && (
-          <div className="bg-gradient-to-r from-purple-500/10 via-blue-500/10 to-green-500/10 rounded-xl p-4 border border-purple-500/20">
-            <div className="flex items-center justify-between flex-wrap gap-4">
-              <div className="flex items-center gap-6">
-                <div className="text-center">
-                  <div className="text-lg font-bold text-green-400">
-                    {data.weeklyRewards.currentPeriod.totalRewardsPool.toLocaleString()}
-                  </div>
-                  <div className="text-xs text-gray-400">Prize Pool</div>
+          <div className="bg-gradient-to-r from-purple-500/10 via-blue-500/10 to-green-500/10 rounded-xl p-6 border border-purple-500/20 mb-8">
+            
+            {/* Weekly Competition Header */}
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-bold text-purple-400">🎯 Weekly Competition</h2>
+              <div className="text-sm text-gray-400">
+                {data.weeklyRewards.currentPeriod.weekDisplay}
+              </div>
+            </div>
+
+            {/* 3-COLUMN STATS GRID */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+              
+              {/* COLUMN 1: PRIZE POOL */}
+              <div className="bg-black/20 rounded-lg p-6 text-center border border-green-500/20">
+                <div className="text-4xl font-bold text-green-400 mb-2">
+                  💰 {data.weeklyRewards.currentPeriod.totalRewardsPool.toLocaleString()}
                 </div>
-                
-                <div className="text-center">
-                  <div className="text-lg font-bold text-blue-400">
-                    {/* FIXED: Calculate matches played from weekly leaderboard data */}
-                    {calculateWeeklyMatchesPlayed()}
-                  </div>
-                  <div className="text-xs text-gray-400">Matches Played</div>
+                <div className="text-lg font-semibold text-gray-300 mb-1">Prize Pool</div>
+                <div className="text-xs text-gray-500">2% of all weekly winnings</div>
+                <div className="text-xs text-green-400 mt-1 font-medium">
+                  {data.weeklyRewards.currentPeriod.totalRewardsPool > 0 ? "Growing!" : "Waiting for games..."}
                 </div>
-                
-                <div className="text-center">
-                  <div className="text-lg font-bold text-purple-400">
-                    {data.weeklyRewards.weeklyLeaderboard?.length || 0}
-                  </div>
-                  <div className="text-xs text-gray-400">Competitors</div>
+              </div>
+
+              {/* COLUMN 2: MATCHES PLAYED */}
+              <div className="bg-black/20 rounded-lg p-6 text-center border border-blue-500/20">
+                <div className="text-4xl font-bold text-blue-400 mb-2">
+                  🎮 {calculateWeeklyMatchesPlayed()}
                 </div>
+                <div className="text-lg font-semibold text-gray-300 mb-1">Matches Played</div>
+                <div className="text-xs text-gray-500">This week's activity</div>
+                <div className="text-xs text-blue-400 mt-1 font-medium">
+                  {calculateWeeklyMatchesPlayed() > 0 ? "Competition Active!" : "Be the first to play!"}
+                </div>
+              </div>
+
+              {/* COLUMN 3: COMPETITORS */}
+              <div className="bg-black/20 rounded-lg p-6 text-center border border-purple-500/20">
+                <div className="text-4xl font-bold text-purple-400 mb-2">
+                  👥 {data.weeklyRewards.weeklyLeaderboard?.length || 0}
+                </div>
+                <div className="text-lg font-semibold text-gray-300 mb-1">Competitors</div>
+                <div className="text-xs text-gray-500">Active players this week</div>
+                <div className="text-xs text-purple-400 mt-1 font-medium">
+                  {(data.weeklyRewards.weeklyLeaderboard?.length || 0) > 0 ? "Join the competition!" : "Be the first competitor!"}
+                </div>
+              </div>
+
+            </div>
+
+            {/* Competition Status */}
+            <div className="flex items-center justify-center gap-4 mb-6">
+              <span className={`px-6 py-3 rounded-full font-bold text-lg ${
+                data.weeklyRewards.currentPeriod.isDistributed 
+                  ? "bg-yellow-500/20 text-yellow-400 border border-yellow-500/30"
+                  : "bg-green-500/20 text-green-400 border border-green-500/30"
+              }`}>
+                {data.weeklyRewards.currentPeriod.isDistributed ? "📊 Distributed" : "⚡ Active Competition"}
+              </span>
+            </div>
+
+            {/* Prize Distribution Preview */}
+            {!data.weeklyRewards.currentPeriod.isDistributed && data.weeklyRewards.currentPeriod.totalRewardsPool > 0 && (
+              <div className="bg-black/30 rounded-lg p-6">
+                <h3 className="text-xl font-bold text-center mb-4 text-gray-200">🏆 Prize Distribution</h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+                  <div className="bg-yellow-500/10 rounded-lg p-3 border border-yellow-500/30">
+                    <div className="text-2xl mb-1">🥇</div>
+                    <div className="font-bold text-yellow-400">
+                      {Math.floor(data.weeklyRewards.currentPeriod.totalRewardsPool * 0.5).toLocaleString()}
+                    </div>
+                    <div className="text-xs text-gray-400">1st Place (50%)</div>
+                  </div>
+                  <div className="bg-gray-500/10 rounded-lg p-3 border border-gray-500/30">
+                    <div className="text-2xl mb-1">🥈</div>
+                    <div className="font-bold text-gray-300">
+                      {Math.floor(data.weeklyRewards.currentPeriod.totalRewardsPool * 0.2).toLocaleString()}
+                    </div>
+                    <div className="text-xs text-gray-400">2nd Place (20%)</div>
+                  </div>
+                  <div className="bg-orange-500/10 rounded-lg p-3 border border-orange-500/30">
+                    <div className="text-2xl mb-1">🥉</div>
+                    <div className="font-bold text-orange-400">
+                      {Math.floor(data.weeklyRewards.currentPeriod.totalRewardsPool * 0.1).toLocaleString()}
+                    </div>
+                    <div className="text-xs text-gray-400">3rd Place (10%)</div>
+                  </div>
+                  <div className="bg-purple-500/10 rounded-lg p-3 border border-purple-500/30">
+                    <div className="text-2xl mb-1">🎯</div>
+                    <div className="font-bold text-purple-400">
+                      {Math.floor(data.weeklyRewards.currentPeriod.totalRewardsPool * 0.2).toLocaleString()}
+                    </div>
+                    <div className="text-xs text-gray-400">4th-10th (20%)</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+          </div>
+        )}
+
+        {/* Current Week Info Preview (when not on week tab) */}
+        {data.weeklyRewards && data.weeklyRewards.currentPeriod && timeframe !== "week" && (
+          <div className="bg-gradient-to-r from-purple-500/20 to-blue-500/20 rounded-xl p-6 border border-purple-500/30 mb-8">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-purple-400">🎯 Weekly Competition Preview</h2>
+              <div className="text-sm text-gray-400">
+                {data.weeklyRewards.currentPeriod.weekDisplay}
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-black/20 rounded-lg p-4 text-center">
+                <div className="text-2xl font-bold text-green-400">
+                  {data.weeklyRewards.currentPeriod.totalRewardsPool.toLocaleString()}
+                </div>
+                <div className="text-sm text-gray-400">Reward Pool</div>
               </div>
               
-              <div className="flex items-center gap-2 text-sm">
-                <span className={`px-3 py-1 rounded-full font-medium ${
-                  data.weeklyRewards.currentPeriod.isDistributed 
-                    ? "bg-yellow-500/20 text-yellow-400 border border-yellow-500/30"
-                    : "bg-green-500/20 text-green-400 border border-green-500/30"
-                }`}>
-                  {data.weeklyRewards.currentPeriod.isDistributed ? "📊 Distributed" : "⚡ Active Competition"}
-                </span>
-                
-                <span className="text-gray-400 text-xs">
-                  {data.weeklyRewards.currentPeriod.weekDisplay}
-                </span>
+              <div className="bg-black/20 rounded-lg p-4 text-center">
+                <div className="text-2xl font-bold text-blue-400">
+                  {calculateWeeklyMatchesPlayed()}
+                </div>
+                <div className="text-sm text-gray-400">Matches Played</div>
+              </div>
+              
+              <div className="bg-black/20 rounded-lg p-4 text-center">
+                <div className="text-2xl font-bold text-yellow-400">
+                  {data.weeklyRewards.currentPeriod.isDistributed ? "Distributed" : "Active"}
+                </div>
+                <div className="text-sm text-gray-400">Status</div>
               </div>
             </div>
             
-            {!data.weeklyRewards.currentPeriod.isDistributed && data.weeklyRewards.currentPeriod.totalRewardsPool > 0 && (
-              <div className="mt-3 pt-3 border-t border-gray-700">
-                <div className="flex items-center gap-4 text-xs text-gray-400">
-                  <span>🥇 1st: {Math.floor(data.weeklyRewards.currentPeriod.totalRewardsPool * 0.5).toLocaleString()}</span>
-                  <span>🥈 2nd: {Math.floor(data.weeklyRewards.currentPeriod.totalRewardsPool * 0.2).toLocaleString()}</span>
-                  <span>🥉 3rd: {Math.floor(data.weeklyRewards.currentPeriod.totalRewardsPool * 0.1).toLocaleString()}</span>
-                  <span className="text-purple-400">+ 7 more spots</span>
-                </div>
-              </div>
-            )}
+            <div className="mt-4 text-center">
+              <button
+                onClick={() => setTimeframe("week")}
+                className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition-colors"
+              >
+                View Full Weekly Competition →
+              </button>
+            </div>
           </div>
         )}
 
-        {/* Weekly Rewards Section */}
-        {data.weeklyRewards && (
-          <div className="space-y-6">
-            
-            {/* Current Week Info (when not on week tab) */}
-            {data.weeklyRewards.currentPeriod && timeframe !== "week" && (
-              <div className="bg-gradient-to-r from-purple-500/20 to-blue-500/20 rounded-xl p-6 border border-purple-500/30">
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-xl font-bold text-purple-400">🎯 Weekly Competition</h2>
-                  <div className="text-sm text-gray-400">
-                    {data.weeklyRewards.currentPeriod.weekDisplay}
+        {/* Claimable Rewards Section */}
+        {data.weeklyRewards && data.weeklyRewards.claimableRewards && data.weeklyRewards.claimableRewards.length > 0 && (
+          <div className="bg-gradient-to-r from-green-500/20 to-blue-500/20 rounded-xl p-6 border border-green-500/30 mb-8">
+            <h2 className="text-2xl font-bold text-green-400 mb-4">💰 Claimable Rewards</h2>
+            <div className="grid gap-4">
+              {data.weeklyRewards.claimableRewards.map((reward) => (
+                <div key={reward.id} className="flex items-center justify-between bg-black/20 rounded-lg p-4">
+                  <div>
+                    <div className="text-lg font-semibold text-white">
+                      🏆 Rank #{reward.rank} - Week {reward.weekDisplay}
+                    </div>
+                    <div className="text-sm text-gray-400">
+                      {reward.points} points earned
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="text-xl font-bold text-green-400">
+                      {reward.rewardAmount.toLocaleString()} tokens
+                    </div>
+                    <button
+                      onClick={() => handleClaim(reward.id)}
+                      disabled={claiming === reward.id}
+                      className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 text-white px-4 py-2 rounded-lg transition-colors"
+                    >
+                      {claiming === reward.id ? "Claiming..." : "Claim"}
+                    </button>
                   </div>
                 </div>
-                
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="bg-black/20 rounded-lg p-4 text-center">
-                    <div className="text-2xl font-bold text-green-400">
-                      {data.weeklyRewards.currentPeriod.totalRewardsPool.toLocaleString()}
-                    </div>
-                    <div className="text-sm text-gray-400">Reward Pool</div>
-                  </div>
-                  
-                  <div className="bg-black/20 rounded-lg p-4 text-center">
-                    <div className="text-2xl font-bold text-blue-400">
-                      {calculateWeeklyMatchesPlayed()}
-                    </div>
-                    <div className="text-sm text-gray-400">Matches Played</div>
-                  </div>
-                  
-                  <div className="bg-black/20 rounded-lg p-4 text-center">
-                    <div className="text-2xl font-bold text-yellow-400">
-                      {data.weeklyRewards.currentPeriod.isDistributed ? "Distributed" : "Active"}
-                    </div>
-                    <div className="text-sm text-gray-400">Status</div>
-                  </div>
-                </div>
+              ))}
+            </div>
+            <div className="mt-4 text-center">
+              <div className="text-sm text-gray-400">
+                Total Claimable: <span className="text-green-400 font-bold">{data.weeklyRewards.totalClaimableAmount.toLocaleString()} tokens</span>
               </div>
-            )}
-
-            {/* Claimable Rewards */}
-            {data.weeklyRewards.claimableRewards && data.weeklyRewards.claimableRewards.length > 0 && (
-              <div className="bg-green-500/20 rounded-xl p-6 border border-green-500/30">
-                <h3 className="text-xl font-bold text-green-400 mb-4">💰 Claimable Weekly Rewards</h3>
-                
-                <div className="space-y-3">
-                  {data.weeklyRewards.claimableRewards.map((reward) => (
-                    <div key={reward.id} className="flex items-center justify-between bg-black/20 rounded-lg p-4">
-                      <div>
-                        <div className="font-bold">#{reward.rank} Place - {reward.weekDisplay}</div>
-                        <div className="text-sm text-gray-400">{reward.points} points earned</div>
-                      </div>
-                      
-                      <div className="flex items-center gap-3">
-                        <div className="text-right">
-                          <div className="font-mono font-bold text-green-400">
-                            {reward.rewardAmount.toLocaleString()} tokens
-                          </div>
-                        </div>
-                        
-                        <button
-                          onClick={() => claimWeeklyReward(reward.id)}
-                          disabled={claiming === reward.id}
-                          className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded-lg font-medium transition-colors"
-                        >
-                          {claiming === reward.id ? 'Claiming...' : 'Claim'}
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                
-                <div className="mt-4 text-center">
-                  <div className="text-lg font-bold text-green-400">
-                    Total Claimable: {data.weeklyRewards.totalClaimableAmount.toLocaleString()} tokens
-                  </div>
-                </div>
-              </div>
-            )}
-
+            </div>
           </div>
         )}
 
-        {/* Main Overall Rankings Table */}
-        <div className="bg-slate-800 rounded-xl p-6">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-xl font-bold">
-              {timeframe === "week" ? "⚡ Weekly Competition Leaderboard" :
-               timeframe === "month" ? "📅 This Month's Leaderboard" :
-               "🏆 All-Time Leaderboard"}
-            </h2>
-            <div className="text-sm text-gray-400">
-              {data.totalPlayers} players • {data.totalMatches} matches
-            </div>
+        {/* Leaderboard Table */}
+        <div className="bg-white/5 rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-white/10">
+                <tr>
+                  <th className="text-left p-4 text-gray-400">Rank</th>
+                  <th className="text-left p-4 text-gray-400">Player</th>
+                  <th className="text-right p-4 text-gray-400">Matches</th>
+                  <th className="text-right p-4 text-gray-400">Wins</th>
+                  <th className="text-right p-4 text-gray-400">Win Rate</th>
+                  <th className="text-right p-4 text-gray-400">
+                    {timeframe === "week" ? "Points" : "Net Profit"}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {(timeframe === "week" ? data.weeklyRewards.weeklyLeaderboard : data.leaderboard)
+                  .slice(0, 50)
+                  .map((entry, index) => {
+                    const isWeekly = timeframe === "week";
+                    const isCurrentUser = entry.userId === wallet.userId;
+                    const displayValue = isWeekly ? (entry as WeeklyPlayer).points : (entry as LeaderboardEntry).netProfit;
+                    const winRate = isWeekly ? 
+                      (entry.matchesPlayed > 0 ? ((entry.matchesWon / entry.matchesPlayed) * 100).toFixed(1) : "0.0") :
+                      (entry as LeaderboardEntry).winRate;
+                    
+                    return (
+                      <tr 
+                        key={entry.userId}
+                        className={`border-t border-white/10 hover:bg-white/5 transition-colors ${
+                          isCurrentUser ? 'bg-blue-500/10 border-blue-500/30' : ''
+                        }`}
+                      >
+                        <td className="p-4">
+                          <span className={`font-bold ${
+                            index === 0 ? 'text-yellow-400' : 
+                            index === 1 ? 'text-gray-300' : 
+                            index === 2 ? 'text-orange-400' : 'text-gray-400'
+                          }`}>
+                            {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `#${index + 1}`}
+                          </span>
+                        </td>
+                        <td className="p-4">
+                          <span className={`font-medium ${isCurrentUser ? 'text-blue-400' : 'text-white'}`}>
+                            {entry.displayName}
+                            {isCurrentUser && <span className="ml-2 text-xs text-blue-400">(You)</span>}
+                          </span>
+                        </td>
+                        <td className="p-4 text-right text-gray-300">{entry.matchesPlayed}</td>
+                        <td className="p-4 text-right text-green-400">{entry.matchesWon}</td>
+                        <td className="p-4 text-right text-purple-400">{winRate}%</td>
+                        <td className="p-4 text-right">
+                          <span className={`font-bold ${
+                            displayValue > 0 ? 'text-green-400' : 
+                            displayValue < 0 ? 'text-red-400' : 'text-gray-400'
+                          }`}>
+                            {isWeekly ? displayValue : (displayValue > 0 ? '+' : '')}{displayValue.toLocaleString()}
+                            {isWeekly ? ' pts' : ''}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
           </div>
-
-          {data.leaderboard && data.leaderboard.length > 0 ? (
-            <div className="bg-white/5 rounded-xl overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="bg-white/10">
-                      <th className="px-6 py-4 text-left">Rank</th>
-                      <th className="px-6 py-4 text-left">Player</th>
-                      <th className="px-6 py-4 text-right">Total Winnings</th>
-                      <th className="px-6 py-4 text-right">Matches Won</th>
-                      <th className="px-6 py-4 text-right">Matches Played</th>
-                      <th className="px-6 py-4 text-right">Win Rate</th>
-                      <th className="px-6 py-4 text-right">Avg Winning</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.leaderboard.map((entry, index) => (
-                      <LeaderboardRow key={entry.userId} entry={entry} index={index} />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ) : (
-            <div className="text-center text-gray-400 py-12">
-              <div className="text-lg">No leaderboard data available</div>
-              <p className="mt-2">Play some games to see rankings!</p>
-            </div>
-          )}
         </div>
+
+        {/* Empty State */}
+        {data.leaderboard.length === 0 && (
+          <div className="text-center py-12">
+            <div className="text-gray-400 text-lg">No players found for this timeframe</div>
+            <div className="text-gray-500 text-sm mt-2">Play some games to appear on the leaderboard!</div>
+          </div>
+        )}
       </div>
     </div>
-  );
-}
-
-function LeaderboardRow({ 
-  entry, 
-  index 
-}: { 
-  entry: LeaderboardEntry; 
-  index: number;
-}) {
-  const getRankDisplay = (rank: number) => {
-    if (rank === 1) return "🥇";
-    if (rank === 2) return "🥈";
-    if (rank === 3) return "🥉";
-    return `#${rank}`;
-  };
-
-  const getRowBg = (rank: number) => {
-    if (rank === 1) return "bg-yellow-500/10 border-yellow-500/20";
-    if (rank === 2) return "bg-gray-400/10 border-gray-400/20";
-    if (rank === 3) return "bg-orange-600/10 border-orange-600/20";
-    return index % 2 === 0 ? "bg-white/5" : "bg-transparent";
-  };
-
-  return (
-    <tr className={`border-b border-white/10 hover:bg-white/10 transition-colors ${getRowBg(entry.rank)}`}>
-      <td className="px-6 py-4">
-        <div className="flex items-center gap-2">
-          <span className="text-lg font-bold">{getRankDisplay(entry.rank)}</span>
-        </div>
-      </td>
-      
-      <td className="px-6 py-4">
-        <div className="font-medium">{entry.displayName}</div>
-        <div className="text-xs text-gray-400">{entry.userId.slice(0, 8)}...</div>
-      </td>
-      
-      <td className="px-6 py-4 text-right">
-        <div className="font-mono font-bold text-green-400">
-          {entry.totalWinnings.toLocaleString()}
-        </div>
-      </td>
-      
-      <td className="px-6 py-4 text-right">
-        <div className="font-mono">{entry.matchesWon}</div>
-      </td>
-      
-      <td className="px-6 py-4 text-right">
-        <div className="font-mono font-bold text-yellow-400">{entry.matchesPlayed}</div>
-      </td>
-      
-      <td className="px-6 py-4 text-right">
-        <div className={`font-mono ${
-          parseFloat(entry.winRate) >= 60 ? 'text-green-400' : 
-          parseFloat(entry.winRate) >= 40 ? 'text-yellow-400' : 'text-red-400'
-        }`}>
-          {entry.winRate}%
-        </div>
-      </td>
-      
-      <td className="px-6 py-4 text-right">
-        <div className="font-mono text-blue-400">
-          {entry.avgWinning.toLocaleString()}
-        </div>
-      </td>
-    </tr>
   );
 }

@@ -1,4 +1,4 @@
-// src/hooks/useGameWallet.ts - FIXED: TypeScript Errors Resolved
+// src/hooks/useGameWallet.ts - COMPLETE REWRITE: Zero Balance Fix
 "use client";
 import { useWallet as useMockWallet } from '../state/wallet';
 import { useSolanaWallet } from './useSolanaWallet';
@@ -24,6 +24,11 @@ export interface GameWallet {
   isTokenMode: boolean;
   balanceSource: 'mock' | 'database' | 'token';
 }
+
+// Custom hook to check if Phase 2 is enabled
+export const useIsPhase2 = (): boolean => {
+  return APP_CONFIG.USE_BLOCKCHAIN && APP_CONFIG.ENABLE_PHASE2;
+};
 
 export const useGameWallet = (): GameWallet => {
   const solanaWallet = useSolanaWallet();
@@ -57,10 +62,10 @@ export const useGameWallet = (): GameWallet => {
       'solanaWallet.loading': solanaWallet.loading,
       'solanaWallet.error': solanaWallet.error,
       
-      // Mock Wallet State - FIXED: Use correct property names
+      // Mock Wallet State
       'mockWallet.userId': mockWallet.userId,
       'mockWallet.balance': mockWallet.balance,
-      'mockWallet.isConnected': mockWallet.isConnected, // FIXED: Use isConnected instead of connected
+      'mockWallet.isConnected': mockWallet.isConnected,
       'mockWallet.displayName': mockWallet.displayName,
       
       // Game State
@@ -72,7 +77,7 @@ export const useGameWallet = (): GameWallet => {
     solanaWallet.connected, solanaWallet.connecting, solanaWallet.publicKey, 
     solanaWallet.solBalance, solanaWallet.tokenBalance, solanaWallet.tokenAccountExists,
     solanaWallet.loading, solanaWallet.error,
-    mockWallet.userId, mockWallet.balance, mockWallet.isConnected, mockWallet.displayName, // FIXED
+    mockWallet.userId, mockWallet.balance, mockWallet.isConnected, mockWallet.displayName,
     gameBalance, isRefreshing
   ]);
 
@@ -121,7 +126,32 @@ export const useGameWallet = (): GameWallet => {
     };
   }, [shouldUseSolanaWallet, solanaWallet.connected, isTokenMode, mockWallet.balance, solanaWallet.tokenBalance, gameBalance]);
 
-  // Database balance fetching (fallback for non-token mode)
+  // Create new wallet user in database (ZERO BALANCE)
+  const createWalletUser = useCallback(async (walletAddress: string) => {
+    try {
+      console.log('👤 Creating new user for wallet:', walletAddress);
+      
+      const response = await fetch('/api/user/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          walletAddress,
+          displayName: formatWalletAddress(walletAddress),
+        }),
+      });
+      
+      if (response.ok) {
+        console.log('✅ New wallet user created successfully with zero balance');
+        setGameBalance(0); // FIXED: Set to 0 instead of 500000
+      } else {
+        console.error('❌ Failed to create wallet user, status:', response.status);
+      }
+    } catch (error) {
+      console.error('❌ Wallet user creation error:', error);
+    }
+  }, []);
+
+  // Database balance fetching (no 500K fallback)
   const fetchGameBalance = useCallback(async (walletAddress: string) => {
     if (isTokenMode) {
       console.log('🪙 Skipping database fetch - in token mode');
@@ -143,7 +173,7 @@ export const useGameWallet = (): GameWallet => {
       } else if (response.status === 404) {
         console.log('👤 User not found, creating new wallet user...');
         await createWalletUser(walletAddress);
-        return 500000;
+        return 0; // FIXED: Return 0 instead of 500000
       } else {
         console.error('❌ Database fetch failed, status:', response.status);
       }
@@ -153,32 +183,7 @@ export const useGameWallet = (): GameWallet => {
       setIsRefreshing(false);
     }
     return 0;
-  }, [isTokenMode]);
-
-  // Create new wallet user in database
-  const createWalletUser = useCallback(async (walletAddress: string) => {
-    try {
-      console.log('👤 Creating new user for wallet:', walletAddress);
-      
-      const response = await fetch('/api/user/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          walletAddress,
-          displayName: formatWalletAddress(walletAddress),
-        }),
-      });
-      
-      if (response.ok) {
-        console.log('✅ New wallet user created successfully');
-        setGameBalance(500000);
-      } else {
-        console.error('❌ Failed to create wallet user, status:', response.status);
-      }
-    } catch (error) {
-      console.error('❌ Wallet user creation error:', error);
-    }
-  }, []);
+  }, [isTokenMode, createWalletUser]);
 
   // Auto-fetch database balance when wallet connects (only if not in token mode)
   useEffect(() => {
@@ -212,7 +217,7 @@ export const useGameWallet = (): GameWallet => {
                             mockUserId;
     
     return {
-      connected: mockWallet.isConnected, // FIXED: Use isConnected instead of connected
+      connected: mockWallet.isConnected,
       connecting: false,
       balance: mockWallet.balance || 0,
       userId: mockUserId,
@@ -269,29 +274,29 @@ export const useGameWallet = (): GameWallet => {
 
   // 3. Solana Mode - Connected
   if (solanaWallet.connected && solanaWallet.publicKey) {
-    console.log('✅ Returning connected Solana wallet interface');
+    console.log('🟣 Returning connected Solana wallet');
+    
+    const walletAddress = solanaWallet.publicKey.toString();
+    const walletName = getWalletName();
+    const displayName = walletName ? 
+      `${walletName} (${formatWalletAddress(walletAddress)})` : 
+      formatWalletAddress(walletAddress);
     
     return {
       connected: true,
       connecting: false,
-      balance, // This is the key fix - uses the correct balance based on mode
-      userId: solanaWallet.publicKey.toString(),
-      displayName: formatWalletAddress(solanaWallet.publicKey.toString()),
+      balance,
+      userId: walletAddress,
+      displayName,
       walletType: 'solana',
       
       disconnect: async () => {
-        try {
-          console.log('🔌 Disconnecting Solana wallet...');
-          if (solanaWallet.disconnect) {
-            await solanaWallet.disconnect();
-          }
-          setGameBalance(0);
-          console.log('✅ Disconnect completed');
-        } catch (error) {
-          console.error('❌ Disconnect error:', error);
+        console.log('Solana wallet disconnect');
+        setGameBalance(0); // Reset game balance on disconnect
+        if (solanaWallet.disconnect) {
+          await solanaWallet.disconnect();
         }
       },
-      
       refreshBalance: async () => {
         console.log('🔄 Refreshing all balances...');
         try {
@@ -309,18 +314,18 @@ export const useGameWallet = (): GameWallet => {
         }
       },
       
-      publicKey: solanaWallet.publicKey.toString(),
-      solBalance: solanaWallet.solBalance,
-      walletName: getWalletName(),
-      tokenBalance: solanaWallet.tokenBalance,
-      tokenAccountExists: solanaWallet.tokenAccountExists,
+      publicKey: walletAddress,
+      solBalance: solanaWallet.solBalance || 0,
+      walletName,
+      tokenBalance: solanaWallet.tokenBalance || 0,
+      tokenAccountExists: solanaWallet.tokenAccountExists || false,
       isTokenMode,
       balanceSource: source,
     };
   }
 
   // 4. Solana Mode - Not Connected
-  console.log('🔌 Returning disconnected Solana wallet interface');
+  console.log('⚪ Returning disconnected Solana wallet');
   
   return {
     connected: false,
@@ -330,7 +335,11 @@ export const useGameWallet = (): GameWallet => {
     displayName: null,
     walletType: 'solana',
     
-    disconnect: async () => {},
+    disconnect: async () => {
+      if (solanaWallet.disconnect) {
+        await solanaWallet.disconnect();
+      }
+    },
     refreshBalance: async () => {},
     
     publicKey: null,
@@ -341,8 +350,4 @@ export const useGameWallet = (): GameWallet => {
     isTokenMode: false,
     balanceSource: 'database',
   };
-};
-
-export const useIsPhase2 = (): boolean => {
-  return APP_CONFIG.USE_BLOCKCHAIN && APP_CONFIG.ENABLE_PHASE2;
 };
